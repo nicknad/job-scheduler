@@ -26,6 +26,17 @@ public interface IPluginRepository
         DateTimeOffset? validatedAt = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Marks a version <see cref="PluginLifecycleState.Staged" /> after successful
+    /// promotion, recording the immutable artifact path and clearing staging.
+    /// </summary>
+    Task SetStagedAsync(
+        string pluginId,
+        Version version,
+        string artifactPath,
+        DateTimeOffset validatedAt,
+        CancellationToken cancellationToken = default);
+
     Task<PluginActivationRecord?> GetActivationAsync(string pluginId, CancellationToken cancellationToken = default);
 
     /// <summary>Atomically publishes the desired active version for a plugin.</summary>

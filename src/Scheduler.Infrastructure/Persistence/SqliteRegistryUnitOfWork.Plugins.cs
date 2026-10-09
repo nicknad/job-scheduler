@@ -9,7 +9,8 @@ internal sealed partial class SqliteRegistryUnitOfWork
 {
     private const string PluginVersionColumns =
         "plugin_id, version, contract_version, entry_assembly, entry_type, execution_mode, " +
-        "artifact_hash, state, installed_at, validated_at, validation_error";
+        "artifact_hash, state, installed_at, validated_at, validation_error, " +
+        "manifest_json, staging_path, artifact_path";
 
     public async Task<PluginVersionRecord?> GetVersionAsync(
         string pluginId,
@@ -75,10 +76,12 @@ internal sealed partial class SqliteRegistryUnitOfWork
             """
             INSERT INTO plugin_versions
                 (plugin_id, version, contract_version, entry_assembly, entry_type, execution_mode,
-                 artifact_hash, state, installed_at, validated_at, validation_error)
+                 artifact_hash, state, installed_at, validated_at, validation_error,
+                 manifest_json, staging_path, artifact_path)
             VALUES
                 ($pluginId, $version, $contractVersion, $entryAssembly, $entryType, $executionMode,
-                 $artifactHash, $state, $installedAt, $validatedAt, $validationError)
+                 $artifactHash, $state, $installedAt, $validatedAt, $validationError,
+                 $manifestJson, $stagingPath, $artifactPath)
             ON CONFLICT(plugin_id, version) DO UPDATE SET
                 contract_version = excluded.contract_version,
                 entry_assembly   = excluded.entry_assembly,
@@ -88,7 +91,10 @@ internal sealed partial class SqliteRegistryUnitOfWork
                 state            = excluded.state,
                 installed_at     = excluded.installed_at,
                 validated_at     = excluded.validated_at,
-                validation_error = excluded.validation_error;
+                validation_error = excluded.validation_error,
+                manifest_json    = excluded.manifest_json,
+                staging_path     = excluded.staging_path,
+                artifact_path    = excluded.artifact_path;
             """);
         command.Parameters.AddWithValue("$pluginId", version.PluginId);
         command.Parameters.AddWithValue("$version", version.Version.ToString());
@@ -103,8 +109,46 @@ internal sealed partial class SqliteRegistryUnitOfWork
             "$validatedAt",
             version.ValidatedAt.HasValue ? DbTimestamp.Format(version.ValidatedAt.Value) : DBNull.Value);
         command.Parameters.AddWithValue("$validationError", version.ValidationError ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$manifestJson", version.ManifestJson ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$stagingPath", version.StagingPath ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$artifactPath", version.ArtifactPath ?? (object)DBNull.Value);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SetStagedAsync(
+        string pluginId,
+        Version version,
+        string artifactPath,
+        DateTimeOffset validatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentNullException.ThrowIfNull(version);
+        ArgumentException.ThrowIfNullOrWhiteSpace(artifactPath);
+
+        await using SqliteCommand command = CreateCommand(
+            """
+            UPDATE plugin_versions
+               SET state        = $stagedState,
+                   artifact_path = $artifactPath,
+                   staging_path  = NULL,
+                   validated_at  = $validatedAt,
+                   validation_error = NULL
+             WHERE plugin_id = $pluginId AND version = $version;
+            """);
+        command.Parameters.AddWithValue("$stagedState", PluginLifecycleState.Staged.ToString());
+        command.Parameters.AddWithValue("$artifactPath", artifactPath);
+        command.Parameters.AddWithValue("$validatedAt", DbTimestamp.Format(validatedAt));
+        command.Parameters.AddWithValue("$pluginId", pluginId);
+        command.Parameters.AddWithValue("$version", version.ToString());
+
+        int affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (affected == 0)
+        {
+            throw new KeyNotFoundException(
+                $"Plugin version '{pluginId}' '{version}' was not found.");
+        }
     }
 
     public async Task SetVersionStateAsync(
@@ -210,5 +254,8 @@ internal sealed partial class SqliteRegistryUnitOfWork
         InstalledAt = DbTimestamp.Parse(reader.GetString(8)),
         ValidatedAt = reader.IsDBNull(9) ? null : DbTimestamp.Parse(reader.GetString(9)),
         ValidationError = reader.IsDBNull(10) ? null : reader.GetString(10),
+        ManifestJson = reader.IsDBNull(11) ? null : reader.GetString(11),
+        StagingPath = reader.IsDBNull(12) ? null : reader.GetString(12),
+        ArtifactPath = reader.IsDBNull(13) ? null : reader.GetString(13),
     };
 }

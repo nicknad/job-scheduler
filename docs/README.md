@@ -18,3 +18,4 @@ fix the code or fix the docs in the same change.
 | [10-testing.md](10-testing.md) | Test strategy mapped to the acceptance criteria |
 | [11-implementation-plan.md](11-implementation-plan.md) | The phased, resilience- and maintainability-first implementation plan |
 | [12-decisions.md](12-decisions.md) | Locked decisions and lightweight ADRs |
+| [graphs/plugin-workflows.md](graphs/plugin-workflows.md) | Diagrams: install/store, load/activate, execute, modules |

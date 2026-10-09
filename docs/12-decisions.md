@@ -40,3 +40,14 @@ supersede with a link. Current ADRs:
   supply-chain control, not a sandbox; the worker backend is the isolation escalation path.
 - **ADR-005 Secrets resolve at the execution boundary.** Consequence: restricted per-execution
   providers, audit of decisions (not values), rotation semantics pinned at dispatch.
+- **ADR-006 Canonical package form and detached signature.** Context: the manifest contains the
+  artifact hash while the signature sits in the archive, so the signed bytes were undefined.
+  Decision: the canonical manifest is compact UTF-8 JSON with ordinal-sorted keys and no signature;
+  `artifactHash` is SHA-256 over a canonical entry digest of all entries except `plugin.json`
+  (which carries the digest and is instead signed) and `signature.json`;
+  the signature covers `canonical-manifest || package-digest`, lives in `signature.json` as
+  `{formatVersion, algorithm, signature}`, and uses `RS256` or `ES256` with a PEM public key held
+  outside every writable root. `contractVersion` is compatible only on the same major with the
+  plugin version less than or equal to the host's ([02-plugin-package.md](02-plugin-package.md)).
+  Consequence: signer and verifier share one byte-exact definition; digest and archive encoding are
+  decoupled; no silent major-version acceptance.

@@ -37,6 +37,10 @@ Repository ports (`IPluginRepository`, `IJobRepository`, `IExecutionRepository`,
 `IOperationRepository`, `IAuditLogRepository`) live in `Scheduler.Application.Persistence`;
 SQLite implementations live in `Scheduler.Infrastructure.Persistence`.
 
+`plugin_versions` additionally stores the canonical manifest JSON and the staging/artifact paths
+plus the validation report (schema migration v2), so an install can be validated, promoted, and
+later activated from durable state alone.
+
 ## Atomicity and the outbox
 
 The registry and the Quartz store **cannot** participate in one transaction. Therefore:

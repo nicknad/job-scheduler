@@ -7,8 +7,11 @@ namespace Scheduler.Application.PluginManagement;
 /// </summary>
 public interface IPluginManager
 {
-    /// <summary>Stages a package and runs validation. Does not affect any active version.</summary>
-    Task<PluginOperation> InstallAsync(string packagePath, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Stages an uploaded package and runs validation + promotion. Does not
+    /// affect any active version. The stream is read once and not retained.
+    /// </summary>
+    Task<PluginOperation> InstallAsync(Stream package, CancellationToken cancellationToken = default);
 
     /// <summary>(Re-)validates a staged version and persists the validation result.</summary>
     Task<ValidationReport> ValidateAsync(string pluginId, Version version, CancellationToken cancellationToken = default);

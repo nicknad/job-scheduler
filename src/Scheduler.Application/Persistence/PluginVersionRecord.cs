@@ -30,4 +30,13 @@ public sealed record PluginVersionRecord
     public DateTimeOffset? ValidatedAt { get; init; }
 
     public string? ValidationError { get; init; }
+
+    /// <summary>Canonical manifest JSON as parsed and validated at install time.</summary>
+    public string? ManifestJson { get; init; }
+
+    /// <summary>Staging directory while an install is in progress; cleared on promotion.</summary>
+    public string? StagingPath { get; init; }
+
+    /// <summary>Immutable artifact path once the verified package is promoted.</summary>
+    public string? ArtifactPath { get; init; }
 }
