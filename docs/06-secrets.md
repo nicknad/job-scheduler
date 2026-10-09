@@ -20,9 +20,9 @@ Values live in a host-owned encrypted store behind the application port `ISecret
   `Get`/`Set`/`Remove`/`List` over references. Writes are atomic (temp file + rename).
 - The 256-bit key lives in a **separate key file outside every writable root** (artifacts, staging,
   data, logs), enforced at startup by `SecretKeyPathGuard`, mirroring signing-key hygiene. The key is
-  the independently protected half: on Windows the key file is intended to be OS-protected (DPAPI or
-  an ACL restricted to the service identity); on Linux it is protected by least-privilege file
-  permissions. The process identity is least-privilege.
+  the independently protected half: the store sets owner-only permissions (`chmod 600`) on Unix-like
+  systems, and on Windows the key file inherits the directory ACL and must be restricted to the
+  service identity by the deployment. The process identity is least-privilege.
 - Values are **never** written to the registry database, the artifact store, logs, audit entries,
   execution result summaries, per-execution logs, tests, or docs. References are not secret.
 - The provider stays replaceable (Vault/cloud managers) without changing job contracts; no such

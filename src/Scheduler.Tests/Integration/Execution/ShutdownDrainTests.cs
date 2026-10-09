@@ -1,5 +1,6 @@
 using Scheduler.Application.Execution;
 using Scheduler.Application.Observability;
+using Scheduler.Application.Persistence;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
 using Scheduler.Tests.Support;
@@ -85,6 +86,28 @@ public sealed class ShutdownDrainTests
         DispatchRejectedException exception = await Assert.ThrowsAsync<DispatchRejectedException>(
             () => context.Dispatcher.DispatchAsync("test-job", Ct));
         Assert.Equal(ExecutionRejectionReason.ShuttingDown, exception.Reason);
+    }
+
+    [Fact]
+    public async Task ShuttingDownRejectionIsRecordedDurably()
+    {
+        using TestPackageKey key = TestPackageKey.CreateRsa();
+        using RuntimeTestContext context = new(
+            key.PublicKeyPath,
+            new FakePluginRuntime(new ScriptedJobHandler((_, _) => Task.FromResult(JobResult.Succeeded()))));
+        await context.InitializeAsync(Ct);
+        await context.SeedActivePluginAsync("test-plugin", new Version(1, 0, 0), Definition(), Ct);
+
+        context.Shutdown.BeginShutdown();
+
+        await Assert.ThrowsAsync<DispatchRejectedException>(() => context.Dispatcher.DispatchAsync("test-job", Ct));
+
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(Ct);
+        IReadOnlyList<ExecutionRejection> rejections = await unitOfWork.Rejections.ListAsync(
+            since: null,
+            limit: 10,
+            Ct);
+        Assert.Contains(rejections, rejection => rejection.Reason == ExecutionRejectionReason.ShuttingDown);
     }
 
     private static JobDefinition Definition() => new()

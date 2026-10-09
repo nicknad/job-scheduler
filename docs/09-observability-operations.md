@@ -109,6 +109,11 @@ operation-scoped idempotency.
 | `GET /api/executions/{id}/logs` | `read` | captured per-execution log entries |
 | `GET /api/audit?actor=&action=&target=&since=&limit=` | `read` | real, filterable audit trail |
 | `GET /api/health` | `read` | detail: DB reachable, reconciler last success, stuck executions |
+| `GET /api/jobs` | `read` | list job definitions |
+| `GET /api/jobs/{id}` | `read` | one job definition |
+| `PUT /api/jobs/{id}` | `activate` | create or update a job definition (bumps the config revision) |
+| `GET /api/plugins` | `read` | list plugins with their active version and state |
+| `GET /api/plugins/{id}/versions` | `read` | list a plugin's versions |
 | `POST /api/plugins` | `install` | stage + validate a package |
 | `POST /api/plugins/{id}/{version}/validate` | `validate` | re-validate a version |
 | `POST /api/plugins/{id}/{version}/activate` | `activate` | activate |
@@ -157,7 +162,7 @@ Liveness stays at `/healthz`. Operational health (`GET /api/health`) reports:
 - **stuck executions** — count of `Running` executions whose `started_at` is older than the
   configured heartbeat threshold, and the affected ids.
 
-A stuck execution is surfaced, not auto-killed. A `StuckExecutionMonitor` hosted service re-checks
+A stuck execution is surfaced, not auto-killed. A `StuckExecutionMonitorService` hosted service re-checks
 the threshold on an interval and logs the stuck executions it finds (metadata only); the same
 threshold backs `GET /api/health`. There are no metrics. `/healthz` stays a liveness probe; the
 operational checks above are computed by `IHealthReportService` and exposed only at `GET /api/health`.

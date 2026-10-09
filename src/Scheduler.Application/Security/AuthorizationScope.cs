@@ -21,3 +21,22 @@ public enum AuthorizationScope
     /// <summary>Every scope; used only when authentication is explicitly disabled.</summary>
     All = Read | Install | Validate | Activate | Deactivate | Rollback | Remove | ManualRun | SecretAdmin,
 }
+
+/// <summary>Parses scope names as they appear in management-API configuration.</summary>
+public static class AuthorizationScopeNames
+{
+    /// <summary>
+    /// Parses a configured scope name. Names are matched case-insensitively and may use
+    /// kebab-case (for example <c>manual-run</c>, <c>secret-admin</c>).
+    /// </summary>
+    public static bool TryParse(string? name, out AuthorizationScope scope)
+    {
+        scope = AuthorizationScope.None;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        return Enum.TryParse(name.Replace("-", string.Empty, StringComparison.Ordinal), ignoreCase: true, out scope);
+    }
+}

@@ -48,6 +48,25 @@ public sealed class ApiAuthenticationTests
     }
 
     [Fact]
+    public async Task DuplicateResolvedTokensFailStartup()
+    {
+        FakeSecretValueStore store = new();
+        await store.SetAsync("first", "shared-token-value", Ct);
+        await store.SetAsync("second", "shared-token-value", Ct);
+        ManagementApiOptions options = new()
+        {
+            Credentials =
+            [
+                new ApiCredentialOptions { Reference = "first", Scopes = [AuthorizationScope.Read] },
+                new ApiCredentialOptions { Reference = "second", Scopes = [AuthorizationScope.Read] },
+            ],
+        };
+        SecretBackedApiAuthenticator authenticator = new(options, store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => authenticator.InitializeAsync(Ct));
+    }
+
+    [Fact]
     public void PrincipalRequiresEveryRequestedScope()
     {
         ApiPrincipal principal = new("x", AuthorizationScope.Read | AuthorizationScope.Activate);

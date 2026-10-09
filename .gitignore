@@ -7,6 +7,7 @@ artifacts/
 # Visual Studio / Rider / VS Code
 .vs/
 .idea/
+.vscode/
 *.user
 *.suo
 *.userosscache
@@ -45,6 +46,6 @@ Desktop.ini
 # Secrets and local-only configuration
 *.env
 appsettings.*.local.json
-**/data/secrets/
+data/
 *.pfx
 *.key

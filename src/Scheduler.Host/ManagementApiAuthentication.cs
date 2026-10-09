@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Scheduler.Application.Security;
 
 namespace Scheduler.Host;
@@ -15,19 +16,23 @@ internal sealed class ManagementApiAuthenticationMiddleware
     private readonly RequestDelegate _next;
     private readonly ManagementApiOptions _options;
     private readonly IApiAuthenticator _authenticator;
+    private readonly ILogger<ManagementApiAuthenticationMiddleware> _logger;
 
     public ManagementApiAuthenticationMiddleware(
         RequestDelegate next,
         ManagementApiOptions options,
-        IApiAuthenticator authenticator)
+        IApiAuthenticator authenticator,
+        ILogger<ManagementApiAuthenticationMiddleware> logger)
     {
         ArgumentNullException.ThrowIfNull(next);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(authenticator);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _next = next;
         _options = options;
         _authenticator = authenticator;
+        _logger = logger;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -49,6 +54,7 @@ internal sealed class ManagementApiAuthenticationMiddleware
 
         if (!_authenticator.TryAuthenticate(context.Request.Headers.Authorization, out ApiPrincipal principal))
         {
+            HostLog.AuthenticationRejected(_logger, "unauthenticated");
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(
                 new { error = "A valid bearer token is required.", reason = "unauthenticated" });
@@ -76,8 +82,12 @@ internal sealed class ScopeRequirementFilter(AuthorizationScope required) : IEnd
         ArgumentNullException.ThrowIfNull(context);
 
         ApiPrincipal? principal = ManagementApiAuthenticationMiddleware.Principal(context.HttpContext);
+        ILogger<ScopeRequirementFilter> logger =
+            context.HttpContext.RequestServices.GetRequiredService<ILogger<ScopeRequirementFilter>>();
+
         if (principal is null)
         {
+            HostLog.AuthenticationRejected(logger, "unauthenticated");
             return Results.Json(
                 new { error = "Authentication is required.", reason = "unauthenticated" },
                 statusCode: StatusCodes.Status401Unauthorized);
@@ -85,6 +95,7 @@ internal sealed class ScopeRequirementFilter(AuthorizationScope required) : IEnd
 
         if (!principal.Has(required))
         {
+            HostLog.AuthorizationForbidden(logger, required.ToString());
             return Results.Json(
                 new { error = $"The '{required}' permission is required.", reason = "forbidden" },
                 statusCode: StatusCodes.Status403Forbidden);

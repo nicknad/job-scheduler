@@ -32,4 +32,16 @@ internal static partial class HostLog
         Level = LogLevel.Warning,
         Message = "Management API remote access is enabled. Bearer tokens are otherwise sent in cleartext; terminate TLS in front of the API.")]
     public static partial void RemoteAccessEnabled(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 1006,
+        Level = LogLevel.Warning,
+        Message = "Management API request rejected: {Reason}.")]
+    public static partial void AuthenticationRejected(ILogger logger, string reason);
+
+    [LoggerMessage(
+        EventId = 1007,
+        Level = LogLevel.Warning,
+        Message = "Management API request forbidden: {Permission}.")]
+    public static partial void AuthorizationForbidden(ILogger logger, string permission);
 }

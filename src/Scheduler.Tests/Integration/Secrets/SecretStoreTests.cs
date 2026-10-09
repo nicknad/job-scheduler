@@ -1,4 +1,6 @@
 using System.IO.Abstractions;
+using System.Security.Cryptography;
+using System.Text.Json.Nodes;
 using Scheduler.Infrastructure.Secrets;
 
 namespace Scheduler.Tests.Integration.Secrets;
@@ -92,6 +94,37 @@ public sealed class SecretStoreTests
             File.WriteAllText(entry, tampered);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => store.GetAsync("a", Ct));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TamperedCiphertextFailsAuthentication()
+    {
+        string root = CreateTempDirectory();
+        try
+        {
+            FileSystem fileSystem = new();
+            SecretStoreOptions options = new()
+            {
+                StoreRoot = Path.Combine(root, "secrets"),
+                KeyPath = Path.Combine(root, "store.key"),
+                BaseDirectory = root,
+            };
+            FileSecretValueStore store = new(options, fileSystem);
+            await store.SetAsync("a", "value-a", Ct);
+
+            string entry = Directory.GetFiles(options.StoreRoot).Single();
+            JsonNode envelope = JsonNode.Parse(File.ReadAllText(entry))!;
+            byte[] ciphertext = Convert.FromBase64String(envelope["data"]!.GetValue<string>());
+            ciphertext[0] ^= 0xFF;
+            envelope["data"] = Convert.ToBase64String(ciphertext);
+            File.WriteAllText(entry, envelope.ToJsonString());
+
+            await Assert.ThrowsAnyAsync<CryptographicException>(() => store.GetAsync("a", Ct));
         }
         finally
         {

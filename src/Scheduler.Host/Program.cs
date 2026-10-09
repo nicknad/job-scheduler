@@ -79,12 +79,7 @@ SecretStoreOptions secretStoreOptions = new()
     WritableRoots = packagingOptions.WritableRoots,
 };
 ManagementApiOptions managementApiOptions = ReadManagementApiOptions(builder.Configuration);
-
-if (!managementApiOptions.Enabled && managementApiOptions.AllowRemoteAccess)
-{
-    throw new InvalidOperationException(
-        "The management API cannot disable authentication while remote access is enabled.");
-}
+managementApiOptions.Validate();
 
 int managementPort = builder.Configuration.GetValue("JobScheduler:ManagementApi:Port", 5080);
 builder.WebHost.ConfigureKestrel(options =>
@@ -166,12 +161,6 @@ await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
 
     SigningKeyPathGuard.EnsureOutsideWritableRoots(packagingOptions, scope.ServiceProvider.GetRequiredService<IFileSystem>());
     SecretKeyPathGuard.EnsureOutsideWritableRoots(secretStoreOptions, scope.ServiceProvider.GetRequiredService<IFileSystem>());
-
-    if (managementApiOptions.Enabled && managementApiOptions.Credentials.Count == 0)
-    {
-        throw new InvalidOperationException(
-            "The management API is enabled but no credentials are configured. Configure at least one credential reference.");
-    }
 
     await BootstrapCredentialsAsync(
         scope.ServiceProvider.GetRequiredService<ISecretValueStore>(),
@@ -711,7 +700,7 @@ static ManagementApiOptions ReadManagementApiOptions(IConfiguration configuratio
                 continue;
             }
 
-            if (!Enum.TryParse(name.Replace("-", string.Empty, StringComparison.Ordinal), ignoreCase: true, out AuthorizationScope parsed))
+            if (!AuthorizationScopeNames.TryParse(name, out AuthorizationScope parsed))
             {
                 throw new InvalidOperationException(
                     $"Management API credential '{reference}' declares unknown scope '{name}'.");

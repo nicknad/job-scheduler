@@ -3,14 +3,17 @@
 ## Management API authentication
 
 - **Authenticate every management API request.** The host binds the management API to **loopback by
-  default** (`http://127.0.0.1:5080`); remote access requires explicit configuration.
+  default** (`http://localhost:5080`, both IPv4 and IPv6 loopback); remote access requires explicit
+  configuration.
 - The credential is a **bearer token** whose value is held in the encrypted secret store and
   referenced from configuration by a **secret reference** — never a literal token in code or in a
   committed config file. The host loads the referenced token(s) at startup; a missing referenced
   token is a startup failure, not a silently open endpoint.
 - **First-run bootstrap**: a configured reference with no stored value may be seeded once from the
   runtime environment variable `SCHEDULER_BOOTSTRAP_MANAGEMENT_TOKEN` (never committed). After that
-  the reference resolves from the store and the bootstrap is a no-op.
+  the reference resolves from the store and the bootstrap is a no-op. Bootstrap applies only when
+  **exactly one** credential reference is configured; with more than one, each reference must be
+  provisioned distinctly (a single shared bootstrap value cannot identify multiple principals).
 - Requests carry `Authorization: Bearer <token>`. Missing or unknown tokens get **401**; a valid
   token without the required permission gets **403** with a reason. Authentication/authorization
   failures are recorded in the structured host log; the durable audit trail records lifecycle and
@@ -35,8 +38,10 @@
 - Verify **signatures and artifact hashes before loading any code**; private signing keys live
   outside the scheduler host's writable directories.
 - Run the host under a **least-privilege OS account**; restrict filesystem writes to the configured
-  storage roots. Secret-store key material lives **outside every writable root** and is
-  independently protected (OS-protected/ACL-restricted).
+  storage roots. Secret-store key material lives **outside every writable root** and must be
+  independently protected by the deployment: the store sets owner-only file permissions on
+  Unix-like systems, and on Windows the key file inherits the directory ACL, which must be
+  restricted to the service identity.
 - **Reject path traversal** and unexpected files in packages before extraction; never load from
   upload directories.
 - Audit lifecycle changes and secret-access **metadata** (who/what/when, allowed/denied) — never
