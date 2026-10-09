@@ -110,7 +110,7 @@ count.
 ## Phase 6 — Secrets and release hardening (done)
 
 **Goal:** least-privilege secrets, authenticated release surface, resilient shutdown.
-Deliverables: OS-protected/encrypted secret store + policy registry (`secret_grants`); restricted
+Deliverables: encrypted, file-backed secret store (key material outside every writable root) + policy registry (`secret_grants`); restricted
 per-execution `ISecretProvider` created by an execution-scoped factory; rotation semantics
 (latest-at-dispatch, retain-until-complete); management-API authentication (loopback default,
 separate permissions per action) and operation-scoped idempotency; graceful shutdown with drain
@@ -134,9 +134,21 @@ Per-step gate — each step ships independently and idempotently:
 Every new registry schema step is forward-only and idempotent; grants are upserts; idempotent
 lifecycle replay is a durable lookup plus a terminal read.
 
-## Phase 7 — E2E Tests
+## Phase 7 — End-to-end example and E2E tests (done)
 
-Genearte an in process example job, and show case how the implementation is workign in detail, how the job is run and so on.
+**Goal:** demonstrate and prove the platform end to end without changing the plugin contract.
+Deliverables: a runnable example plugin (`examples/Scheduler.Example.Plugin`) that declares a secret
+reference and does deterministic, observable work; a repeatable signed-package build
+(`examples/Scheduler.Example.PackageBuilder`) through the real canonical manifest/signature pipeline;
+a documented operator walkthrough ([13-example.md](13-example.md)); and an automated E2E test that
+drives the real host as a child process over the management API.
+Tests: the integrated flow (install → validate → activate → secret → run → observe → drain → backup)
+against the real composition root (#1, #2, #8, #10, #11, #12, #16, #17, #19); the example plugin
+through the in-process runtime for the drain `Wait`/`Cancel` paths (#18); a focused unit test for the
+example's digest.
+Exit gate: the full acceptance checklist stays green and the E2E covers the joined flow.
+Per-step gate: (1) spec docs; (2) example plugin + signed package build; (3) E2E harness + integrated
+test; (4) focused example tests; (5) walkthrough doc; (6) docs finalized, phase marked done.
 
 ## Phase 8 — Worker backend
 

@@ -18,12 +18,14 @@ fix the code or fix the docs in the same change.
 | [10-testing.md](10-testing.md) | Test strategy mapped to the acceptance criteria |
 | [11-implementation-plan.md](11-implementation-plan.md) | The phased, resilience- and maintainability-first implementation plan |
 | [12-decisions.md](12-decisions.md) | Locked decisions and lightweight ADRs |
-| [graphs/plugin-workflows.md](graphs/plugin-workflows.md) | Diagrams: install/store, load/activate, execute, modules |
+| [13-example.md](13-example.md) | Runnable end-to-end example and the operator walkthrough |
+| [graphs/plugin-workflows.md](graphs/plugin-workflows.md) | Diagrams: install/store, load/activate, execute, secrets/auth, modules |
 
-Phases 0–5 of the [implementation plan](11-implementation-plan.md) are implemented: package
+Phases 0–7 of the [implementation plan](11-implementation-plan.md) are implemented: package
 install/validation/promotion, the in-process plugin runtime (load → activate → run → drain), the
 dispatcher with the durable execution store, the Quartz hosted scheduler with the reconciler that
-applies the outbox and repairs drift toward the registry, and the CLI-first observability and
-operations surface (durable done/not-done summary, execution history, per-execution logs, audit
-read, health detail). The workflow graphs mark **implemented** sections and edges versus those still
-**planned** for later phases.
+applies the outbox and repairs drift toward the registry, the CLI-first observability and operations
+surface (durable done/not-done summary, execution history, per-execution logs, audit read, health
+detail), least-privilege secrets with an authenticated management API, resilient shutdown, backup,
+and the [runnable example + end-to-end tests](13-example.md). The workflow graphs mark
+**implemented** sections and edges versus those still **planned** for later phases.

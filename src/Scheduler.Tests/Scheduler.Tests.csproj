@@ -24,5 +24,7 @@
     <ProjectReference Include="..\Scheduler.Infrastructure\Scheduler.Infrastructure.csproj" />
     <ProjectReference Include="..\Scheduler.Runtime.InProcess\Scheduler.Runtime.InProcess.csproj" />
     <ProjectReference Include="..\Scheduler.Tests.TestPlugins\Scheduler.Tests.TestPlugins.csproj" />
+    <ProjectReference Include="..\..\examples\Scheduler.Example.Plugin\Scheduler.Example.Plugin.csproj" />
+    <ProjectReference Include="..\Scheduler.Host\Scheduler.Host.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 </Project>

@@ -345,6 +345,12 @@
       "scheduler.contracts": {
         "type": "Project"
       },
+      "scheduler.example.plugin": {
+        "type": "Project",
+        "dependencies": {
+          "Scheduler.Contracts": "[1.0.0, )"
+        }
+      },
       "scheduler.infrastructure": {
         "type": "Project",
         "dependencies": {

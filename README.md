@@ -10,7 +10,9 @@ the scheduler host**.
 - **State:** durable SQLite-backed plugin registry, job registry, execution store, and audit log
 - **License:** Apache-2.0
 
-The full specification and implementation plan live in [`docs/`](docs/README.md).
+The full specification and implementation plan live in [`docs/`](docs/README.md). A runnable
+end-to-end example lives in [`examples/`](examples/), with an operator walkthrough in
+[docs/13-example.md](docs/13-example.md).
 
 ## Repository layout
 
@@ -26,6 +28,9 @@ src/
   Scheduler.Cli/          CLI that calls the same management API
   Scheduler.Tests/        xUnit v3 tests on the Microsoft Testing Platform
   Scheduler.Tests.TestPlugins/  Test-only plugin assemblies loaded by runtime tests
+examples/
+  Scheduler.Example.Plugin/         Runnable example plugin (declares a secret reference)
+  Scheduler.Example.PackageBuilder/ Builds the signed example package via the canonical pipeline
 ```
 
 ## Prerequisites

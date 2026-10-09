@@ -253,4 +253,30 @@ Quartz types stay inside `Scheduler.Infrastructure` (and the Host composition ro
 reaches Quartz only through the application-owned `IScheduleStore` port, so `Scheduler.Application`
 and `Scheduler.Contracts` remain Quartz-free.
 
+## Example & end-to-end (Phase 7 — implemented)
+
+A runnable example plugin declares a secret reference and is packaged through the same canonical
+manifest + signature pipeline the host validates. The E2E test starts the real host and exercises
+the whole path over the authenticated management API; nothing bypasses install → validate → activate
+or the reconciler. See [13-example.md](../13-example.md).
+
+```mermaid
+flowchart LR
+  TOOL["Scheduler.Example.PackageBuilder<br/>canonical digest + signature"] --> PKG[("signed example package")]
+  PKG --> CLI["Scheduler.Cli (HTTP client)"]
+  CLI --> API["Management API (Host)"]
+  API --> PM["PluginManager install/validate/activate"]
+  PM --> ART[("artifact store")]
+  API --> GRANTS[("secret_grants")]
+  API --> RUN["manual run"]
+  RUN --> DISP["Dispatcher → Runtime.InProcess"]
+  DISP --> SEC["GrantedSecretProvider<br/>(example/report-api-key)"]
+  SEC --> HDL["ReportJobHandler<br/>digest + report (no value)"]
+  HDL --> EXC[("executions + logs")]
+  API --> BAK["backup + verify"]
+```
+
+The automated E2E (`ExampleEndToEndTests`) asserts the joined flow, and `ExamplePluginTests` covers
+the drain `Wait`/`Cancel` paths with the real example package.
+
 Planned in a later phase: the worker backend and worker identity authorization (phase 8).

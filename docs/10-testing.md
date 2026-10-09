@@ -15,6 +15,11 @@ xUnit v3 on the Microsoft Testing Platform (MTP), in `src/Scheduler.Tests`
   Quartz application), mid-drain kills, corrupted/tampered packages, unload failure (plugin that
   retains a reference), secret denial paths, replayed/duplicate operations, crash-left `Running`
   executions → `Interrupted`.
+- **End-to-end**: `ExampleEndToEndTests` starts the real `Scheduler.Host` as a child process (temp
+  data/keys/db, loopback port, bootstrap admin credential) and drives it through
+  `Scheduler.Cli`/`HttpSchedulerApiClient`, asserting the joined acceptance flow (#1, #2, #8, #10,
+  #11, #12, #16, #17, #19); `ExamplePluginTests` runs the same signed example package through the
+  in-process runtime for the drain `Wait`/`Cancel` paths (#18). See [13-example.md](13-example.md).
 
 ## Acceptance criteria (each becomes an automated integration test)
 
@@ -37,7 +42,7 @@ xUnit v3 on the Microsoft Testing Platform (MTP), in `src/Scheduler.Tests`
 | 15 | Secret rotation | Idle rotation is picked up by the next execution; rotation mid-flight does not change a running execution's held value |
 | 16 | API authentication | Unauthenticated and under-permissioned requests are rejected (401/403); a granted scope succeeds; loopback by default |
 | 17 | Operation idempotency | Replaying a lifecycle request's operation id returns the same result without re-executing |
-| 18 | Shutdown drain | In-flight execution completes under `Wait`; `Cancel` cancels it; interrupted drains re-enter from the operation record on restart |
+| 18 | Shutdown drain | In-flight execution completes under `Wait`; `Cancel` cancels it; a `ShuttingDown` dispatch is rejected durably; interrupted lifecycle operations are recovered on restart |
 | 19 | Backup | A consistent backup restores artifact hashes and preserves lifecycle/activation state |
 
 ## Fixture rules
