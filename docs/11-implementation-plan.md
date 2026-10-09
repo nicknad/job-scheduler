@@ -29,7 +29,7 @@ hooks, PackageGuard allowlist, xUnit v3 + MTP, Apache-2.0, contract assembly v0 
 `PluginLoadContext` skeleton, SQLite schema DDL, IPC message contracts, host/API + CLI skeletons,
 docs-as-spec.
 
-## Phase 1 — Registry core
+## Phase 1 — Registry core (done)
 
 **Goal:** authoritative state on disk.
 Deliverables: SQLite connection management (WAL, explicit path config), idempotent forward-only

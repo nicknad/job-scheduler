@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Quartz.Extensions.Hosting" />
+    <PackageReference Include="System.IO.Abstractions" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Scheduler.Application\Scheduler.Application.csproj" />

@@ -52,7 +52,7 @@ public sealed class ScheduleSpecTests
     [Fact]
     public void OneShotIsValid()
     {
-        ScheduleSpec spec = ScheduleSpec.FromOneShot(DateTimeOffset.UtcNow.AddDays(1));
+        ScheduleSpec spec = ScheduleSpec.FromOneShot(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero));
 
         Assert.Empty(spec.Validate());
     }
