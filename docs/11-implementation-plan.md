@@ -94,7 +94,11 @@ Tests: secret authorization negative/positive (acceptance #8); rotation during i
 executions; crash/drain/shutdown fault-injection sweeps.
 Exit gate: full acceptance checklist (#1–#8, #10) green.
 
-## Phase 7 — Worker backend
+## Phase 7 — E2E Tests
+
+Genearte an in process example job, and show case how the implementation is workign in detail, how the job is run and so on.
+
+## Phase 8 — Worker backend
 
 Same logical execution contract over authenticated local IPC (`Scheduler.Runtime.Worker`):
 supervision (start/monitor/replace unhealthy workers), structured messages (existing IPC
@@ -103,16 +107,16 @@ restart. Exit gate: acceptance #9 green.
 
 ## Crash-consistency matrix (fault-injection targets)
 
-| Crash point | On-restart behavior |
-| --- | --- |
-| After staging, before validation | Staged package unvalidated; ignored or re-validated |
-| Mid-validation | Re-run validation; no promotion occurred |
-| After promotion, before activation request | Version `Staged`; no dispatch impact |
-| Mid-activation (load, before publication) | Operation rolled back; previous active version keeps serving |
-| After publication, before Quartz apply | Outbox replay applies triggers; activation already atomic |
-| Mid-drain | Drain re-enters from operation record; old executions re-classified |
-| Mid-execution | Execution → `Interrupted`; explicit recovery classification |
-| After external side effect, before success write | At-least-once: retry possible; handlers tolerate duplicates |
+| Crash point                                      | On-restart behavior                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| After staging, before validation                 | Staged package unvalidated; ignored or re-validated                 |
+| Mid-validation                                   | Re-run validation; no promotion occurred                            |
+| After promotion, before activation request       | Version `Staged`; no dispatch impact                                |
+| Mid-activation (load, before publication)        | Operation rolled back; previous active version keeps serving        |
+| After publication, before Quartz apply           | Outbox replay applies triggers; activation already atomic           |
+| Mid-drain                                        | Drain re-enters from operation record; old executions re-classified |
+| Mid-execution                                    | Execution → `Interrupted`; explicit recovery classification         |
+| After external side effect, before success write | At-least-once: retry possible; handlers tolerate duplicates         |
 
 ## Maintainability practices
 
@@ -126,12 +130,12 @@ restart. Exit gate: acceptance #9 green.
 
 ## Risk register
 
-| Risk | Mitigation |
-| --- | --- |
+| Risk                                                 | Mitigation                                                                             |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Cooperative unload fails (plugin retains references) | Treat as operational condition: mark unclean, alert, keep serving; never claim removed |
-| SQLite contention under load | WAL mode, short transactions, single writer path for registry; outbox batched apply |
-| Quartz/registry drift | Outbox + periodic reconcile sweep; drift repair tests |
-| Tampered packages | Defense-in-depth gates in phase 2 + key hygiene |
-| Secrets leakage | Restricted provider, audit metadata only, rotation tests, no values in logs/tests |
-| Plugin destabilizes host (in-process) | Trusted-signing prerequisite, timeouts, worker backend as escalation |
-| Contract breaking drift | Frozen contract + compat check at validation + ADR process |
+| SQLite contention under load                         | WAL mode, short transactions, single writer path for registry; outbox batched apply    |
+| Quartz/registry drift                                | Outbox + periodic reconcile sweep; drift repair tests                                  |
+| Tampered packages                                    | Defense-in-depth gates in phase 2 + key hygiene                                        |
+| Secrets leakage                                      | Restricted provider, audit metadata only, rotation tests, no values in logs/tests      |
+| Plugin destabilizes host (in-process)                | Trusted-signing prerequisite, timeouts, worker backend as escalation                   |
+| Contract breaking drift                              | Frozen contract + compat check at validation + ADR process                             |
