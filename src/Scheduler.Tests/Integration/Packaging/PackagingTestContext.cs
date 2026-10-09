@@ -1,9 +1,11 @@
 using System.IO.Abstractions;
+using Scheduler.Application.Execution;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
 using Scheduler.Contracts;
 using Scheduler.Infrastructure.Packaging;
+using Scheduler.Runtime.InProcess.AssemblyLoading;
 using Scheduler.Tests.Integration;
 
 namespace Scheduler.Tests.Integration.Packaging;
@@ -39,6 +41,8 @@ internal sealed class PackagingTestContext : IDisposable
         PackageValidator validator = new(verifier);
         ZipPackageArchiveReader reader = new(FileSystem);
         AuditWriter audit = new(_database.UnitOfWorkFactory, TimeProvider);
+        Runtime = new InProcessPluginRuntime();
+        RunningExecutions = new RunningExecutionRegistry(TimeProvider);
         Manager = new PluginManager(
             _database.UnitOfWorkFactory,
             reader,
@@ -47,7 +51,10 @@ internal sealed class PackagingTestContext : IDisposable
             audit,
             TimeProvider,
             limits ?? Options.ToLimits(),
-            SchedulerContract.CurrentVersion);
+            SchedulerContract.CurrentVersion,
+            Runtime,
+            RunningExecutions,
+            ExecutionOptions);
     }
 
     public IFileSystem FileSystem { get; }
@@ -57,6 +64,12 @@ internal sealed class PackagingTestContext : IDisposable
     public IArtifactStore ArtifactStore { get; }
 
     public PluginManager Manager { get; }
+
+    public IPluginRuntime Runtime { get; }
+
+    public IRunningExecutionRegistry RunningExecutions { get; }
+
+    public ExecutionOptions ExecutionOptions { get; } = new();
 
     public TimeProvider TimeProvider { get; } = TimeProvider.System;
 

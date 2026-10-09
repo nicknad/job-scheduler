@@ -1,11 +1,18 @@
 using System.IO.Abstractions;
 using Microsoft.AspNetCore.Http.Features;
+using Scheduler.Application.Execution;
+using Scheduler.Application.JobManagement;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
 using Scheduler.Contracts;
+using Scheduler.Contracts.Execution;
+using Scheduler.Contracts.Jobs;
+using Scheduler.Contracts.Secrets;
 using Scheduler.Infrastructure.Packaging;
 using Scheduler.Infrastructure.Persistence;
+using Scheduler.Runtime.InProcess.AssemblyLoading;
+using Scheduler.Runtime.InProcess.Execution;
 
 const long MultipartBodyLengthLimit = 512L * 1024 * 1024;
 
@@ -28,6 +35,10 @@ PackagingOptions packagingOptions = new()
     LogsRoot = builder.Configuration["JobScheduler:LogsRoot"] ?? "logs",
     BaseDirectory = builder.Environment.ContentRootPath,
 };
+ExecutionOptions executionOptions = new()
+{
+    GlobalConcurrencyLimit = builder.Configuration.GetValue("JobScheduler:GlobalConcurrencyLimit", 8),
+};
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IFileSystem>(new FileSystem());
@@ -35,6 +46,7 @@ builder.Services.AddSingleton(persistenceOptions);
 builder.Services.AddSingleton(packagingOptions);
 builder.Services.AddSingleton(packagingOptions.ToLimits());
 builder.Services.AddSingleton(SchedulerContract.CurrentVersion);
+builder.Services.AddSingleton(executionOptions);
 builder.Services.AddSingleton<ISqliteConnectionFactory>(services =>
     new SqliteConnectionFactory(
         services.GetRequiredService<PersistenceOptions>(),
@@ -49,6 +61,18 @@ builder.Services.AddSingleton<IPackageArchiveReader, ZipPackageArchiveReader>();
 builder.Services.AddSingleton<IPackageSignatureVerifier, PackageSignatureVerifier>();
 builder.Services.AddSingleton<IArtifactStore, FileSystemArtifactStore>();
 builder.Services.AddSingleton<PackageValidator>();
+
+builder.Services.AddSingleton<IPluginRuntime, InProcessPluginRuntime>();
+builder.Services.AddSingleton<IRunningExecutionRegistry, RunningExecutionRegistry>();
+builder.Services.AddSingleton<ConcurrencyGate>();
+builder.Services.AddSingleton<RetryPolicyEvaluator>();
+builder.Services.AddSingleton<IJobExecutionLogger, NullJobExecutionLogger>();
+builder.Services.AddSingleton<IJobProgressReporter, NullJobProgressReporter>();
+builder.Services.AddSingleton<ISecretProvider, DeniedSecretProvider>();
+builder.Services.AddSingleton<IExecutionBackend, InProcessExecutionBackend>();
+builder.Services.AddSingleton<ExecutionRunner>();
+builder.Services.AddSingleton<IDispatcher, Dispatcher>();
+builder.Services.AddSingleton<IJobManager, JobManager>();
 builder.Services.AddSingleton<IPluginManager, PluginManager>();
 
 var app = builder.Build();
@@ -118,22 +142,123 @@ app.MapGet("/api/plugins/{id}/versions", async (
     CancellationToken cancellationToken) =>
     Results.Ok(await manager.ListVersionsAsync(id, cancellationToken)));
 
-app.MapPost("/api/plugins/{id}/{version}/activate", (string id, string version) => NotImplemented("activate", id, version));
-app.MapPost("/api/plugins/{id}/deactivate", (string id) => NotImplemented("deactivate", id));
-app.MapPost("/api/plugins/{id}/{version}/rollback", (string id, string version) => NotImplemented("rollback", id, version));
+app.MapPost("/api/plugins/{id}/{version}/activate", async (
+    string id,
+    string version,
+    IPluginManager manager,
+    CancellationToken cancellationToken) =>
+{
+    if (!Version.TryParse(version, out Version? parsed))
+    {
+        return Results.BadRequest(new { error = $"'{version}' is not a valid version." });
+    }
 
-app.MapGet("/api/jobs", () => Results.Ok(Array.Empty<object>()));
-app.MapPut("/api/jobs/{id}", (string id) => NotImplemented("updateJob", id));
-app.MapPost("/api/jobs/{id}/run", (string id) => NotImplemented("runJob", id));
+    PluginOperation operation = await manager.ActivateAsync(id, parsed, cancellationToken);
+    return LifecycleResult(operation);
+});
 
-app.MapPost("/api/executions/{id}/cancel", (Guid id) => NotImplemented("cancelExecution", id));
-app.MapGet("/api/executions/{id}", (Guid id) => Results.NotFound(new { id }));
+app.MapPost("/api/plugins/{id}/deactivate", async (
+    string id,
+    IPluginManager manager,
+    CancellationToken cancellationToken) =>
+    LifecycleResult(await manager.DeactivateAsync(id, cancellationToken)));
+
+app.MapPost("/api/plugins/{id}/{version}/rollback", async (
+    string id,
+    string version,
+    IPluginManager manager,
+    CancellationToken cancellationToken) =>
+{
+    if (!Version.TryParse(version, out Version? parsed))
+    {
+        return Results.BadRequest(new { error = $"'{version}' is not a valid version." });
+    }
+
+    return LifecycleResult(await manager.RollbackAsync(id, parsed, cancellationToken));
+});
+
+app.MapPost("/api/plugins/{id}/remove", async (
+    string id,
+    IPluginManager manager,
+    CancellationToken cancellationToken) =>
+    LifecycleResult(await manager.RemoveAsync(id, cancellationToken)));
+
+app.MapGet("/api/jobs", async (IJobManager jobs, CancellationToken cancellationToken) =>
+    Results.Ok(await jobs.ListAsync(cancellationToken)));
+
+app.MapGet("/api/jobs/{id}", async (string id, IJobManager jobs, CancellationToken cancellationToken) =>
+{
+    JobDefinition? definition = await jobs.GetAsync(id, cancellationToken);
+    return definition is null ? Results.NotFound(new { id }) : Results.Ok(definition);
+});
+
+app.MapPut("/api/jobs/{id}", async (
+    string id,
+    JobDefinition definition,
+    IJobManager jobs,
+    CancellationToken cancellationToken) =>
+{
+    if (!string.Equals(id, definition.JobId, StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { error = "The route id and definition jobId must match." });
+    }
+
+    try
+    {
+        return Results.Ok(await jobs.UpdateAsync(definition, cancellationToken));
+    }
+    catch (JobValidationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message, exception.Errors });
+    }
+});
+
+app.MapPost("/api/jobs/{id}/run", async (
+    string id,
+    IJobManager jobs,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        Guid executionId = await jobs.RunNowAsync(id, cancellationToken);
+        return Results.Ok(new { executionId });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = exception.Message });
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status409Conflict);
+    }
+});
+
+app.MapGet("/api/executions/{id:guid}", async (
+    Guid id,
+    IRegistryUnitOfWorkFactory unitOfWorkFactory,
+    CancellationToken cancellationToken) =>
+{
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync(cancellationToken);
+    ExecutionRecord? execution = await unitOfWork.Executions.GetAsync(id, cancellationToken);
+    return execution is null ? Results.NotFound(new { id }) : Results.Ok(execution);
+});
+
+app.MapPost("/api/executions/{id:guid}/cancel", async (
+    Guid id,
+    IDispatcher dispatcher,
+    CancellationToken cancellationToken) =>
+{
+    bool cancelled = await dispatcher.CancelAsync(id, "Requested via API", cancellationToken);
+    return cancelled ? Results.Ok(new { executionId = id, status = "cancelling" }) : Results.NotFound(new { id });
+});
 
 app.MapGet("/api/audit", () => Results.Ok(Array.Empty<object>()));
 
 app.Run();
 
-static IResult NotImplemented(string operation, params object?[] targets) =>
-    Results.Json(new { operation, targets }, statusCode: StatusCodes.Status501NotImplemented);
+static IResult LifecycleResult(PluginOperation operation) =>
+    operation.Status == PluginOperationStatus.Succeeded
+        ? Results.Ok(operation)
+        : Results.Json(operation, statusCode: StatusCodes.Status422UnprocessableEntity);
 
 public partial class Program;

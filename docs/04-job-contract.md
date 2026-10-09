@@ -19,14 +19,29 @@ public interface IJobHandler
 {
     Task<JobResult> ExecuteAsync(JobExecutionContext context, CancellationToken cancellationToken);
 }
+
+public interface IJobHandlerFactory
+{
+    IJobHandler CreateHandler(string jobId);
+}
 ```
+
+`IJobHandlerFactory` is an optional companion to `IJobPlugin`: when a plugin implements it, the
+host resolves the handler for each discovered job by its stable id. A plugin that itself implements
+`IJobHandler` may omit it and serve every job with one handler. The host resolves handlers at
+activation; a plugin that provides none fails activation rather than failing at dispatch.
+
+`JobResult` reports `Succeeded` or `Failed` plus a sanitized summary. A failed result also carries a
+`Retryable` flag (default `false`): the host retries only failures the handler marks retryable. A
+thrown execution exception is treated as retryable (transient/unknown).
 
 `JobExecutionContext` is a platform type, **not** Quartz's `IJobExecutionContext`. It provides:
 
 - Job, execution, and configuration-revision identifiers; correlation ID.
 - The pinned plugin id/version for this execution.
 - Validated parameters (serializable data only).
-- A **restricted** secret provider (only granted references resolve).
+- A **restricted** secret provider (only granted references resolve; the authorization policy
+  lands in phase 6).
 - A minimal logger and a progress reporter.
 - Deadline information; cancellation flows through the `CancellationToken`.
 

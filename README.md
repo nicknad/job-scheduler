@@ -25,6 +25,7 @@ src/
   Scheduler.Host/         Long-running host (management API + Quartz hosting)
   Scheduler.Cli/          CLI that calls the same management API
   Scheduler.Tests/        xUnit v3 tests on the Microsoft Testing Platform
+  Scheduler.Tests.TestPlugins/  Test-only plugin assemblies loaded by runtime tests
 ```
 
 ## Prerequisites

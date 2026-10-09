@@ -334,6 +334,18 @@
           "System.IO.Abstractions": "[22.3.0, )"
         }
       },
+      "scheduler.runtime.inprocess": {
+        "type": "Project",
+        "dependencies": {
+          "Scheduler.Application": "[1.0.0, )"
+        }
+      },
+      "scheduler.tests.testplugins": {
+        "type": "Project",
+        "dependencies": {
+          "Scheduler.Contracts": "[1.0.0, )"
+        }
+      },
       "Quartz": {
         "type": "CentralTransitive",
         "requested": "[4.4.0, )",

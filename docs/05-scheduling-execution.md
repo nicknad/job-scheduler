@@ -10,9 +10,15 @@
 - Schedule changes update triggers without touching plugin code. Parameter changes affect **new**
   executions by default. Plugin version changes change the dispatch target, never running
   executions.
+- The dispatcher resolves the active version from the single-row activation record and pins it (with
+  the configuration revision) on the execution. A job whose plugin has no active version does not
+  dispatch; the failure is explicit.
 - Plugins cannot modify scheduler state.
+- Dispatch is invoked by `IJobManager.RunNowAsync` for manual runs (phase 3); Quartz scheduled
+  fires enter the same dispatcher in phase 4. Running executions are cancelled cooperatively
+  through the dispatcher (an explicit cancel request or the configured drain policy).
 
-## Reconciliation
+## Reconciliation (phase 4 — planned)
 
 The reconciler (on startup, after lifecycle operations, and on a periodic sweep):
 
@@ -49,7 +55,8 @@ recovery classification before any retry — never auto-retry blindly.
 
 - Bounded (`MaxAttempts`), configurable per job.
 - Only retry failures classified `Retryable` (unknown/transient); known-permanent failures stop
-  immediately.
+  immediately. A thrown execution exception is retryable; a handler-reported `JobResult.Failed` is
+  retryable only when the handler sets `JobResult.Retryable`.
 - Exponential backoff with additive jitter, capped by `MaxDelay` (implemented in
   `Scheduler.Application` `RetryPolicyEvaluator`).
 - No automatic retries for non-idempotent operations unless side effects are tracked.

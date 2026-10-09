@@ -10,7 +10,7 @@ internal sealed partial class SqliteRegistryUnitOfWork
     private const string PluginVersionColumns =
         "plugin_id, version, contract_version, entry_assembly, entry_type, execution_mode, " +
         "artifact_hash, state, installed_at, validated_at, validation_error, " +
-        "manifest_json, staging_path, artifact_path";
+        "manifest_json, staging_path, artifact_path, unclean_unload_reason";
 
     public async Task<PluginVersionRecord?> GetVersionAsync(
         string pluginId,
@@ -241,6 +241,34 @@ internal sealed partial class SqliteRegistryUnitOfWork
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task SetUncleanUnloadAsync(
+        string pluginId,
+        Version version,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentNullException.ThrowIfNull(version);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        await using SqliteCommand command = CreateCommand(
+            """
+            UPDATE plugin_versions
+               SET unclean_unload_reason = $reason
+             WHERE plugin_id = $pluginId AND version = $version;
+            """);
+        command.Parameters.AddWithValue("$reason", reason);
+        command.Parameters.AddWithValue("$pluginId", pluginId);
+        command.Parameters.AddWithValue("$version", version.ToString());
+
+        int affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (affected == 0)
+        {
+            throw new KeyNotFoundException(
+                $"Plugin version '{pluginId}' '{version}' was not found.");
+        }
+    }
+
     private static PluginVersionRecord ReadPluginVersion(SqliteDataReader reader) => new()
     {
         PluginId = reader.GetString(0),
@@ -257,5 +285,6 @@ internal sealed partial class SqliteRegistryUnitOfWork
         ManifestJson = reader.IsDBNull(11) ? null : reader.GetString(11),
         StagingPath = reader.IsDBNull(12) ? null : reader.GetString(12),
         ArtifactPath = reader.IsDBNull(13) ? null : reader.GetString(13),
+        UncleanUnloadReason = reader.IsDBNull(14) ? null : reader.GetString(14),
     };
 }

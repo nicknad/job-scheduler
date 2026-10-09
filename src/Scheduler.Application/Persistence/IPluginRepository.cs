@@ -43,4 +43,14 @@ public interface IPluginRepository
     Task SetActivationAsync(PluginActivationRecord activation, CancellationToken cancellationToken = default);
 
     Task ClearActivationAsync(string pluginId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records that a version's assembly context could not be unloaded. The
+    /// version is never treated as removed while this reason is present.
+    /// </summary>
+    Task SetUncleanUnloadAsync(
+        string pluginId,
+        Version version,
+        string reason,
+        CancellationToken cancellationToken = default);
 }

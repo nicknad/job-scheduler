@@ -39,4 +39,11 @@ public sealed record PluginVersionRecord
 
     /// <summary>Immutable artifact path once the verified package is promoted.</summary>
     public string? ArtifactPath { get; init; }
+
+    /// <summary>
+    /// Reason the version's assembly context could not be unloaded. A non-null
+    /// value marks an unclean unload: the version is retained but its context is
+    /// still alive and must never be treated as removed.
+    /// </summary>
+    public string? UncleanUnloadReason { get; init; }
 }

@@ -7,4 +7,5 @@
   <Project Path="src\Scheduler.Host\Scheduler.Host.csproj" />
   <Project Path="src\Scheduler.Cli\Scheduler.Cli.csproj" />
   <Project Path="src\Scheduler.Tests\Scheduler.Tests.csproj" />
+  <Project Path="src\Scheduler.Tests.TestPlugins\Scheduler.Tests.TestPlugins.csproj" />
 </Solution>

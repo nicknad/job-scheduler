@@ -20,7 +20,7 @@ is independent from job-definition state: an **active** plugin can have **disabl
 | Validating | Signature/hash/manifest/contract validation in progress |
 | Rejected | Validation failed; result persisted |
 | Staged | Verified artifact promoted to immutable storage |
-| Activating | Load + job discovery + definition validation + atomic publication + trigger reconciliation |
+| Activating | Load + job discovery + definition validation + atomic publication (Quartz trigger reconciliation is phase 4) |
 | Active | The published desired version; receives new executions |
 | Draining | No new executions; running executions finish or are cancelled per drain policy |
 | Retired | No executions reference this version; package retained for rollback |
@@ -38,14 +38,24 @@ is independent from job-definition state: an **active** plugin can have **disabl
 
 ## Activate
 
-1. Confirm the target version is `Staged` and valid.
-2. Load the plugin into its own collectible `AssemblyLoadContext`; discover job definitions.
-3. Validate definitions: identifier uniqueness, schedule validity, parameter schema, required
-   capabilities vs. granted permissions.
+1. Confirm the target version is `Staged` and valid (a `Retired` version may be re-activated by
+   rollback; an already-`Active` target is an idempotent success).
+2. Load the plugin into its own collectible `AssemblyLoadContext`; discover job definitions and
+   resolve a handler for each via `IJobHandlerFactory` (or the plugin itself when it implements
+   `IJobHandler`).
+3. Validate definitions: per-definition shape (job id, schedule, timeout, retry, secret
+   references), plugin identity consistency, and uniqueness of job ids. Capability/permission
+   checks are phase 6.
 4. **Atomically publish** the new active version in the registry (single-row activation record +
-   the version's state → `Active`). "Active" is only claimed after this success point.
-5. Reconcile its job definitions and triggers with Quartz (via durable operation records).
-6. Record the outcome in the audit log.
+   the version's state → `Active` + the discovered job definitions). "Active" is only claimed after
+   this success point.
+5. Apply the configured drain policy to the outgoing version's running executions (`Wait` within
+   the drain timeout, or `Cancel`), then attempt cooperative unload of its context. A clean unload
+   moves it to `Retired`; an unclean unload leaves it `Draining` and records the reason
+   (`plugin_versions.unclean_unload_reason`) rather than claiming removal.
+6. Apply the job definitions and triggers to Quartz via durable operation records. Registry
+   publication is the phase 3 boundary; Quartz application is phase 4.
+7. Record the outcome in the audit log.
 
 If the process dies mid-activation, the reconciler finishes or rolls back the operation from the
 operation record; the previous active version keeps serving until publication succeeds.
@@ -58,7 +68,9 @@ operation record; the previous active version keeps serving until publication su
 4. Apply the configured drain policy to old-version executions:
    - `Wait` — drain within the configured drain timeout;
    - `Cancel` — cooperative cancellation.
-5. Unregister old definitions no longer present; attempt to unload the old assembly context.
+5. Attempt to unload the old assembly context (clean → `Retired`; unclean → `Draining` + marker).
+   Unregistering definitions the new version no longer provides is applied with reconciliation
+   (phase 4).
 6. Retain the previous package for rollback (`Retired`, not deleted).
 
 **Invariant:** updating a plugin never changes the behavior of already-running executions. Each

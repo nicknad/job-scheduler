@@ -72,6 +72,7 @@ internal sealed partial class SqliteRegistryUnitOfWork
             """
             UPDATE executions
                SET status = $status,
+                   attempt = $attempt,
                    started_at = $startedAt,
                    ended_at = $endedAt,
                    result_summary = $resultSummary,
@@ -79,6 +80,7 @@ internal sealed partial class SqliteRegistryUnitOfWork
              WHERE execution_id = $executionId;
             """);
         command.Parameters.AddWithValue("$status", execution.Status.ToString());
+        command.Parameters.AddWithValue("$attempt", execution.Attempt);
         command.Parameters.AddWithValue(
             "$startedAt",
             execution.StartedAt.HasValue ? DbTimestamp.Format(execution.StartedAt.Value) : DBNull.Value);

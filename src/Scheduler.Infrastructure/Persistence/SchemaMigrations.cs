@@ -20,6 +20,12 @@ public static class SchemaMigrations
                 ALTER TABLE plugin_versions ADD COLUMN staging_path TEXT;
                 ALTER TABLE plugin_versions ADD COLUMN artifact_path TEXT;
                 """),
+        new Migration(
+            Version: 3,
+            Name: "plugin-version-unclean-unload",
+            Sql: """
+                ALTER TABLE plugin_versions ADD COLUMN unclean_unload_reason TEXT;
+                """),
     ];
 
     public static int LatestVersion => All[^1].Version;

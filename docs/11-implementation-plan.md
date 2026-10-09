@@ -49,14 +49,16 @@ Tests: tampered/corrupt/traversal packages rejected (acceptance #2); valid packa
 active version is untouched by failed installs.
 Exit gate: acceptance #2 green.
 
-## Phase 3 — In-process runtime and dispatcher
+## Phase 3 — In-process runtime and dispatcher (done)
 
 **Goal:** trusted execution with clean lifecycle edges.
-Deliverables: plugin activation (load via `PluginLoadContext`, `GetJobs()` discovery, definition
-validation), activation publication (single-row), dispatcher (resolves active version, per-job +
-global concurrency gates, no-overlap default), execution scope per run, timeout + cancellation
-propagation, execution store writes (Pending → Running → terminal), sanitized errors, retry
-engine wiring (`RetryPolicyEvaluator`), cooperative unload + unclean-unload surfacing.
+Deliverables: plugin activation (load via `PluginLoadContext`, `GetJobs()` discovery, handler
+resolution via `IJobHandlerFactory`, definition validation), activation publication (single-row
+`plugin_activation` + version state + discovered job definitions), dispatcher (resolves the active
+version, global + per-job concurrency gates, no-overlap default), per-run execution scope, timeout +
+cancellation propagation, execution store writes (Pending → Running → terminal), sanitized errors,
+retry engine wiring (`RetryPolicyEvaluator`), cooperative unload with unclean-unload surfacing
+(`plugin_versions.unclean_unload_reason`). Quartz trigger application remains phase 4.
 Tests: execute a compiled test plugin; timeout/cancel paths; parallel vs no-overlap; unload
 success and cooperative-unload-failure paths.
 Exit gate: single-job runtime install → activate → run → drain works end-to-end.

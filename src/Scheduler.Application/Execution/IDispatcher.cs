@@ -1,4 +1,5 @@
 using Scheduler.Contracts.Execution;
+using Scheduler.Contracts.Plugins;
 
 namespace Scheduler.Application.Execution;
 
@@ -17,12 +18,32 @@ public interface IDispatcher
 }
 
 /// <summary>
+/// Everything a backend needs to build the execution scope and invoke a handler.
+/// It carries no scheduler internals; the backend constructs the
+/// <see cref="JobExecutionContext" /> from it.
+/// </summary>
+public sealed record ExecutionInvocation(
+    IJobHandler Handler,
+    Guid ExecutionId,
+    string JobId,
+    string PluginId,
+    Version PluginVersion,
+    int ConfigurationRevision,
+    DateTimeOffset ScheduledAt,
+    DateTimeOffset Deadline,
+    string CorrelationId,
+    IReadOnlyDictionary<string, string?> Parameters);
+
+/// <summary>
 /// A backend that executes jobs. In-process and worker backends implement the
 /// same logical execution contract.
 /// </summary>
 public interface IExecutionBackend
 {
     ExecutionMode Mode { get; }
+
+    /// <summary>Executes one attempt and returns its result.</summary>
+    Task<JobResult> ExecuteAsync(ExecutionInvocation invocation, CancellationToken cancellationToken);
 }
 
 /// <summary>How a retiring plugin version's running executions are treated.</summary>
