@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Stable job plugin contract shared between the scheduler host and plugins. Intentionally dependency-free.</Description>
+  </PropertyGroup>
+</Project>

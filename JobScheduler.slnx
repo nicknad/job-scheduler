@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="src\Scheduler.Contracts\Scheduler.Contracts.csproj" />
+  <Project Path="src\Scheduler.Application\Scheduler.Application.csproj" />
+  <Project Path="src\Scheduler.Infrastructure\Scheduler.Infrastructure.csproj" />
+  <Project Path="src\Scheduler.Runtime.InProcess\Scheduler.Runtime.InProcess.csproj" />
+  <Project Path="src\Scheduler.Runtime.Worker\Scheduler.Runtime.Worker.csproj" />
+  <Project Path="src\Scheduler.Host\Scheduler.Host.csproj" />
+  <Project Path="src\Scheduler.Cli\Scheduler.Cli.csproj" />
+  <Project Path="src\Scheduler.Tests\Scheduler.Tests.csproj" />
+</Solution>

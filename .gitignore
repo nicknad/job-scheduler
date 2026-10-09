@@ -1,0 +1,50 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.code-workspace
+
+# Build logs and results
+*.binlog
+*.log
+TestResults/
+test-results/
+coverage/
+*.coverage
+*.trx
+*.xml.results
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+.nuget/
+
+#(dotnet) tool manifests are tracked; local tool content is not
+.store/
+
+# OS / editor noise
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+
+# Secrets and local-only configuration
+*.env
+appsettings.*.local.json
+secrets/
+*.pfx
+*.key
