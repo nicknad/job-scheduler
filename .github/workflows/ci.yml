@@ -50,4 +50,4 @@ jobs:
         run: Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $HOME '.dotnet' 'tools')
 
       - name: PackageGuard
-        run: packageguard
+        run: PackageGuard
