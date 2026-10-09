@@ -1,4 +1,5 @@
 using System.Globalization;
+using Scheduler.Application.Maintenance;
 using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
@@ -23,16 +24,26 @@ public static class SchedulerCli
         ISchedulerApiClient client,
         TextWriter output,
         TextWriter error,
+        CancellationToken cancellationToken = default) =>
+        await RunAsync(args, client, TextReader.Null, output, error, cancellationToken);
+
+    public static async Task<int> RunAsync(
+        string[] args,
+        ISchedulerApiClient client,
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
 
         try
         {
-            return await DispatchAsync(args, client, output, error, cancellationToken);
+            return await DispatchAsync(args, client, input, output, error, cancellationToken);
         }
         catch (SchedulerApiException exception)
         {
@@ -54,6 +65,7 @@ public static class SchedulerCli
     private static async Task<int> DispatchAsync(
         string[] args,
         ISchedulerApiClient client,
+        TextReader input,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
@@ -110,6 +122,24 @@ public static class SchedulerCli
 
             case ["plugin", "remove", string id]:
                 return await PluginOperationAsync(client, output, () => client.RemovePluginAsync(id, cancellationToken), cancellationToken);
+
+            case ["secret", "list"]:
+                return await SecretListAsync(client, output, cancellationToken);
+
+            case ["secret", "set", string reference]:
+                return await SecretSetAsync(client, input, output, error, reference, cancellationToken);
+
+            case ["secret", "remove", string reference]:
+                return await SecretRemoveAsync(client, output, reference, cancellationToken);
+
+            case ["secret", "grant", ..]:
+                return await SecretGrantAsync(client, output, error, args[2..], revoke: false, cancellationToken);
+
+            case ["secret", "revoke", ..]:
+                return await SecretGrantAsync(client, output, error, args[2..], revoke: true, cancellationToken);
+
+            case ["backup", "--to", string destination]:
+                return await BackupAsync(client, output, destination, cancellationToken);
 
             default:
                 error.WriteLine("error: unknown or invalid command.");
@@ -423,6 +453,100 @@ public static class SchedulerCli
         return operation.Status == PluginOperationStatus.Succeeded ? ExitDone : ExitNotDone;
     }
 
+    private static async Task<int> SecretListAsync(
+        ISchedulerApiClient client,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> references = await client.ListSecretReferencesAsync(cancellationToken);
+        if (references.Count == 0)
+        {
+            output.WriteLine("no secrets");
+            return ExitDone;
+        }
+
+        foreach (string reference in references)
+        {
+            output.WriteLine(reference);
+        }
+
+        return ExitDone;
+    }
+
+    private static async Task<int> SecretSetAsync(
+        ISchedulerApiClient client,
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
+        string reference,
+        CancellationToken cancellationToken)
+    {
+        string? value = await input.ReadLineAsync(cancellationToken);
+        if (string.IsNullOrEmpty(value))
+        {
+            error.WriteLine("error: provide the secret value on standard input.");
+            return ExitError;
+        }
+
+        await client.SetSecretAsync(reference, value, cancellationToken);
+        output.WriteLine($"secret {reference}: set");
+        return ExitDone;
+    }
+
+    private static async Task<int> SecretRemoveAsync(
+        ISchedulerApiClient client,
+        TextWriter output,
+        string reference,
+        CancellationToken cancellationToken)
+    {
+        await client.RemoveSecretAsync(reference, cancellationToken);
+        output.WriteLine($"secret {reference}: removed");
+        return ExitDone;
+    }
+
+    private static async Task<int> SecretGrantAsync(
+        ISchedulerApiClient client,
+        TextWriter output,
+        TextWriter error,
+        string[] args,
+        bool revoke,
+        CancellationToken cancellationToken)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("error: secret grant/revoke requires <pluginId> <reference>.");
+            return ExitError;
+        }
+
+        string pluginId = args[0];
+        string reference = args[1];
+        string? jobId = TryGetFlag(args, "--job", out string job) ? job : null;
+
+        if (revoke)
+        {
+            bool removed = await client.RevokeSecretAsync(pluginId, jobId, reference, cancellationToken);
+            output.WriteLine($"grant {pluginId}/{jobId ?? "*"} {reference}: {(removed ? "revoked" : "absent")}");
+        }
+        else
+        {
+            await client.GrantSecretAsync(pluginId, jobId, reference, cancellationToken);
+            output.WriteLine($"grant {pluginId}/{jobId ?? "*"} {reference}: granted");
+        }
+
+        return ExitDone;
+    }
+
+    private static async Task<int> BackupAsync(
+        ISchedulerApiClient client,
+        TextWriter output,
+        string destination,
+        CancellationToken cancellationToken)
+    {
+        BackupResult result = await client.BackupAsync(destination, cancellationToken);
+        output.WriteLine($"backup {result.Root}: {result.ArtifactCount} artifact(s), verified={result.Verified}");
+        return result.Verified ? ExitDone : ExitNotDone;
+    }
+
     private static void PrintExecutions(TextWriter output, IReadOnlyList<ExecutionRecord> executions)
     {
         if (executions.Count == 0)
@@ -538,6 +662,12 @@ public static class SchedulerCli
               plugin deactivate <id>
               plugin rollback <id> <version>
               plugin remove <id>
+              secret list
+              secret set <reference>            (value read from standard input)
+              secret remove <reference>
+              secret grant <pluginId> <reference> [--job <id>]
+              secret revoke <pluginId> <reference> [--job <id>]
+              backup --to <destination>
             """);
         return exitCode;
     }

@@ -35,6 +35,13 @@ public static class SchemaMigrations
                 SchemaDefinitions.ExecutionRejections,
                 SchemaDefinitions.ScheduleEvents,
                 SchemaDefinitions.ReconciliationRuns)),
+        new Migration(
+            Version: 5,
+            Name: "secrets-and-idempotency",
+            Sql: string.Join(
+                Environment.NewLine,
+                SchemaDefinitions.SecretGrants,
+                SchemaDefinitions.Idempotency)),
     ];
 
     public static int LatestVersion => All[^1].Version;

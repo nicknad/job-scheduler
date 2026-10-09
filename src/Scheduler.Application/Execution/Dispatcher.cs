@@ -21,6 +21,7 @@ public sealed class Dispatcher : IDispatcher
     private readonly ConcurrencyGate _gate;
     private readonly IRunningExecutionRegistry _running;
     private readonly IExecutionRejectionWriter _rejections;
+    private readonly ShutdownSignal _shutdown;
     private readonly TimeProvider _timeProvider;
 
     public Dispatcher(
@@ -31,6 +32,7 @@ public sealed class Dispatcher : IDispatcher
         ConcurrencyGate gate,
         IRunningExecutionRegistry running,
         IExecutionRejectionWriter rejections,
+        ShutdownSignal shutdown,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(unitOfWorkFactory);
@@ -40,6 +42,7 @@ public sealed class Dispatcher : IDispatcher
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(running);
         ArgumentNullException.ThrowIfNull(rejections);
+        ArgumentNullException.ThrowIfNull(shutdown);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _unitOfWorkFactory = unitOfWorkFactory;
@@ -49,12 +52,26 @@ public sealed class Dispatcher : IDispatcher
         _gate = gate;
         _running = running;
         _rejections = rejections;
+        _shutdown = shutdown;
         _timeProvider = timeProvider;
     }
 
     public async Task<Guid> DispatchAsync(string jobId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        if (_shutdown.IsShuttingDown)
+        {
+            await _rejections.RecordAsync(
+                jobId,
+                pluginId: null,
+                ExecutionRejectionReason.ShuttingDown,
+                $"Job '{jobId}' was not admitted because the host is shutting down.",
+                CancellationToken.None);
+            throw new DispatchRejectedException(
+                ExecutionRejectionReason.ShuttingDown,
+                "The host is shutting down and is not accepting new executions.");
+        }
 
         JobRecord? job = await GetJobAsync(jobId, cancellationToken);
         if (job is null)

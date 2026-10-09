@@ -39,12 +39,18 @@ public interface IRunningExecutionRegistry
 
     IReadOnlyList<IRunningExecution> ListForPlugin(string pluginId, Version? version = null);
 
+    /// <summary>All currently-running executions, across plugins.</summary>
+    IReadOnlyList<IRunningExecution> ListAll();
+
     /// <summary>Waits until no execution of the plugin version is running, or the timeout elapses.</summary>
     Task WaitForPluginAsync(
         string pluginId,
         Version version,
         TimeSpan timeout,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Waits until all executions finish, or the timeout elapses; returns whether it drained.</summary>
+    Task<bool> WaitForAllAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Thread-safe in-memory registry of running executions.</summary>
@@ -117,6 +123,14 @@ public sealed class RunningExecutionRegistry : IRunningExecutionRegistry
         }
     }
 
+    public IReadOnlyList<IRunningExecution> ListAll()
+    {
+        lock (_lock)
+        {
+            return _entries.Values.Cast<IRunningExecution>().ToList();
+        }
+    }
+
     public async Task WaitForPluginAsync(
         string pluginId,
         Version version,
@@ -135,6 +149,30 @@ public sealed class RunningExecutionRegistry : IRunningExecutionRegistry
         }
     }
 
+    public async Task<bool> WaitForAllAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        long start = _timeProvider.GetTimestamp();
+        while (Count() > 0)
+        {
+            if (_timeProvider.GetElapsedTime(start) >= timeout)
+            {
+                return false;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+        }
+
+        return true;
+    }
+
+    private int Count()
+    {
+        lock (_lock)
+        {
+            return _entries.Count;
+        }
+    }
+
     private void Remove(Guid executionId)
     {
         lock (_lock)
@@ -147,7 +185,9 @@ public sealed class RunningExecutionRegistry : IRunningExecutionRegistry
     {
         private readonly CancellationTokenSource _cancellation;
         private readonly Action<Guid> _onDisposed;
+        private readonly object _sync = new();
         private string? _reason;
+        private bool _disposed;
 
         public Entry(
             Guid executionId,
@@ -175,12 +215,25 @@ public sealed class RunningExecutionRegistry : IRunningExecutionRegistry
 
         public void Cancel(string reason)
         {
-            _reason = reason;
-            _cancellation.Cancel();
+            lock (_sync)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _reason = reason;
+                _cancellation.Cancel();
+            }
         }
 
         public void Dispose()
         {
+            lock (_sync)
+            {
+                _disposed = true;
+            }
+
             _onDisposed(ExecutionId);
             _cancellation.Dispose();
         }

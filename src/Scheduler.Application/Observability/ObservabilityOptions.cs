@@ -16,6 +16,9 @@ public sealed class ObservabilityOptions
     /// </summary>
     public TimeSpan ExecutionHeartbeat { get; init; } = TimeSpan.FromMinutes(30);
 
+    /// <summary>How often the stuck-execution monitor re-checks the heartbeat threshold.</summary>
+    public TimeSpan StuckCheckInterval { get; init; } = TimeSpan.FromMinutes(1);
+
     /// <summary>Maximum number of executions returned by a single history query.</summary>
     public int ExecutionListLimit { get; init; } = 200;
 

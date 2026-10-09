@@ -45,6 +45,6 @@ Desktop.ini
 # Secrets and local-only configuration
 *.env
 appsettings.*.local.json
-secrets/
+**/data/secrets/
 *.pfx
 *.key

@@ -9,6 +9,9 @@ public enum ExecutionRejectionReason
     NoActiveVersion,
     NoHandler,
     Concurrency,
+
+    /// <summary>The host is shutting down and no longer accepts fire times.</summary>
+    ShuttingDown,
 }
 
 /// <summary>A durable record of a dispatch that was not admitted.</summary>

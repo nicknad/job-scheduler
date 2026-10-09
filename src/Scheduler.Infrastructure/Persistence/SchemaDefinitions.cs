@@ -138,6 +138,34 @@ public static class SchemaDefinitions
         );
         """;
 
+    /// <summary>
+    /// Durable secret grants: which plugin (optionally which job) may resolve a
+    /// reference. An empty <c>job_id</c> is a plugin-wide grant. Values never
+    /// appear here; they live only in the encrypted store.
+    /// </summary>
+    public const string SecretGrants = """
+        CREATE TABLE IF NOT EXISTS secret_grants (
+            plugin_id        TEXT NOT NULL,
+            job_id           TEXT NOT NULL,
+            secret_reference TEXT NOT NULL,
+            granted_by       TEXT NOT NULL,
+            granted_at       TEXT NOT NULL,
+            PRIMARY KEY (plugin_id, job_id, secret_reference)
+        );
+        """;
+
+    /// <summary>Durable operation-id → result mapping for idempotent lifecycle requests.</summary>
+    public const string Idempotency = """
+        CREATE TABLE IF NOT EXISTS idempotency (
+            operation_id TEXT PRIMARY KEY,
+            action       TEXT NOT NULL,
+            target       TEXT NOT NULL,
+            result       TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+        """;
+
     public static readonly string[] All =
     [
         PluginRegistry,

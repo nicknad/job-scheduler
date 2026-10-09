@@ -107,17 +107,32 @@ The summary aggregates are idempotent reads; `Interrupted` classification runs o
 is idempotent (only `Running` rows transition); log retention only trims files beyond the configured
 count.
 
-## Phase 6 — Secrets and release hardening
+## Phase 6 — Secrets and release hardening (done)
 
 **Goal:** least-privilege secrets, authenticated release surface, resilient shutdown.
-Deliverables: DPAPI/OS-backed secret store + policy registry; restricted per-execution
-`ISecretProvider`; rotation semantics (latest-at-dispatch, retain-until-complete); management-API
-authentication (loopback default, separate permissions per action) and operation-scoped idempotency;
-graceful shutdown with drain timeout and heartbeat-based stuck-execution monitoring; consistent
-backup tooling.
-Tests: secret authorization negative/positive (acceptance #8); rotation during idle + running
-executions; crash/drain/shutdown fault-injection sweeps.
-Exit gate: full acceptance checklist (#1–#8, #10) green.
+Deliverables: OS-protected/encrypted secret store + policy registry (`secret_grants`); restricted
+per-execution `ISecretProvider` created by an execution-scoped factory; rotation semantics
+(latest-at-dispatch, retain-until-complete); management-API authentication (loopback default,
+separate permissions per action) and operation-scoped idempotency; graceful shutdown with drain
+timeout and heartbeat-based stuck-execution monitoring; consistent backup tooling.
+Tests: secret authorization negative/positive (acceptance #8, #10); rotation during idle + running
+executions (#15); API authentication (#16); operation idempotency (#17); drain/shutdown (#18);
+backup verify (#19).
+Exit gate: full acceptance checklist (#1–#8, #10, #15–#19) green.
+Per-step gate — each step ships independently and idempotently:
+1. Spec docs updated (gates green).
+2. `secret_grants` + encrypted value store behind the `ISecretValueStore` port, key material outside
+   writable roots, repositories + tests.
+3. Per-execution `ISecretProvider` factory wired through `InProcessExecutionBackend`, with allowed/
+   denied audit metadata + tests (acceptance #8, #10).
+4. Rotation semantics: resolve-at-dispatch, retain-in-flight, explicit revoke path + tests (#15).
+5. Management-API bearer auth with per-action scopes, loopback default, and operation-scoped
+   idempotency + CLI credential/commands + tests (#16, #17).
+6. Graceful shutdown drain + stuck-execution monitor + tests (#18).
+7. Consistent backup command (SQLite checkpoint + artifact snapshot + hash verification) + tests (#19).
+8. Docs finalized; this phase marked done.
+Every new registry schema step is forward-only and idempotent; grants are upserts; idempotent
+lifecycle replay is a durable lookup plus a terminal read.
 
 ## Phase 7 — E2E Tests
 

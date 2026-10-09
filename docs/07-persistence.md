@@ -29,6 +29,8 @@ and clock failures can be exercised in tests.
 | Execution store | Run status, attempts, timestamps, results |
 | Audit log | Who performed which action and when |
 | Operations (outbox) | Durable, resumable lifecycle and scheduler-change records |
+| Secret grants | Which plugin/job may resolve a secret reference (references only, never values) |
+| Idempotency | Operation id → recorded lifecycle result, for replay-safe mutations |
 | Quartz store | Triggers, job details, scheduler-specific persistence |
 
 The schema is owned by `Scheduler.Infrastructure` (`SchemaDefinitions`); migrations are
@@ -37,12 +39,14 @@ forward-only, versioned, and applied idempotently at startup. Applied versions a
 run resumes cleanly on the next start.
 
 Repository ports (`IPluginRepository`, `IJobRepository`, `IExecutionRepository`,
-`IOperationRepository`, `IAuditLogRepository`) live in `Scheduler.Application.Persistence`;
+`IOperationRepository`, `IAuditLogRepository`, `ISecretGrantRepository`, `IIdempotencyStore`) live
+in `Scheduler.Application.Persistence`/`Scheduler.Application.Secrets`/`Scheduler.Application.Security`;
 SQLite implementations live in `Scheduler.Infrastructure.Persistence`.
 
 `plugin_versions` additionally stores the canonical manifest JSON and the staging/artifact paths
 plus the validation report (schema migration v2), so an install can be validated, promoted, and
-later activated from durable state alone.
+later activated from durable state alone. Migration v5 adds `secret_grants` and `idempotency`;
+both are created idempotently (`CREATE TABLE IF NOT EXISTS`).
 
 ## Atomicity and the outbox
 
@@ -61,10 +65,14 @@ final. Startup reconciliation reads non-terminal operations to resume or roll th
 **Activation is a single-row publication** (`plugin_activation`), which makes the desired
 active version unambiguous at all times.
 
-## Backup and restore (Quartz store)
+## Backup and restore
 
-Back up the registry database and the artifact store consistently (checkpoint database, snapshot
-artifacts, verify artifact hashes against the registry after restore).
+`IBackupService` (implemented by `FileSystemBackupService`) takes a consistent backup: a SQLite
+`VACUUM INTO` checkpoint of the registry (lifecycle and activation rows included), a snapshot of the
+artifact store, and a hash manifest. The destination is confined to the configured backup root
+(`PackagingOptions.BackupRoot`, default `data/backups`); a destination outside it is rejected. A
+reused destination is cleared of stale artifacts first. Verification re-hashes every recorded
+artifact and requires the registry database to be present.
 
 ## Quartz store
 

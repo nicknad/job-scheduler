@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Scheduler.Application.Maintenance;
 using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
@@ -11,7 +13,8 @@ namespace Scheduler.Cli;
 
 /// <summary>
 /// The thin HTTP client for the management API. Every command maps to one
-/// endpoint; no scheduling or lifecycle logic lives here.
+/// endpoint; no scheduling or lifecycle logic lives here. The bearer token, when
+/// provided, is attached to every request.
 /// </summary>
 public sealed class HttpSchedulerApiClient : ISchedulerApiClient
 {
@@ -19,10 +22,15 @@ public sealed class HttpSchedulerApiClient : ISchedulerApiClient
 
     private readonly HttpClient _http;
 
-    public HttpSchedulerApiClient(HttpClient http)
+    public HttpSchedulerApiClient(HttpClient http, string? token = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         _http = http;
+
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
     }
 
     public Task<ExecutionSummary> GetSummaryAsync(TimeSpan? window, CancellationToken cancellationToken = default)
@@ -132,6 +140,67 @@ public sealed class HttpSchedulerApiClient : ISchedulerApiClient
     public Task<PluginOperation> RemovePluginAsync(string pluginId, CancellationToken cancellationToken = default) =>
         PostAsync<PluginOperation>($"api/plugins/{Uri.EscapeDataString(pluginId)}/remove", cancellationToken);
 
+    public async Task SetSecretAsync(string secretReference, string value, CancellationToken cancellationToken = default)
+    {
+        using HttpResponseMessage response = await _http.PostAsJsonAsync(
+            "api/secrets",
+            new SecretWrite(secretReference, value),
+            JsonOptions,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<string>> ListSecretReferencesAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<string>>("api/secrets", cancellationToken);
+
+    public async Task RemoveSecretAsync(string secretReference, CancellationToken cancellationToken = default)
+    {
+        using HttpResponseMessage response = await _http.DeleteAsync(
+            $"api/secrets/{Uri.EscapeDataString(secretReference)}",
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task GrantSecretAsync(
+        string pluginId,
+        string? jobId,
+        string secretReference,
+        CancellationToken cancellationToken = default)
+    {
+        using HttpResponseMessage response = await _http.PostAsJsonAsync(
+            "api/secrets/grants",
+            new SecretGrantRequest(pluginId, jobId, secretReference),
+            JsonOptions,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task<bool> RevokeSecretAsync(
+        string pluginId,
+        string? jobId,
+        string secretReference,
+        CancellationToken cancellationToken = default)
+    {
+        List<string> query = [];
+        Add(query, "pluginId", pluginId);
+        Add(query, "jobId", jobId);
+        Add(query, "secretReference", secretReference);
+
+        using HttpResponseMessage response = await _http.DeleteAsync("api/secrets/grants" + Query(query), cancellationToken);
+        RevokeResponse body = await ReadAsync<RevokeResponse>(response, cancellationToken);
+        return string.Equals(body.Status, "revoked", StringComparison.Ordinal);
+    }
+
+    public async Task<BackupResult> BackupAsync(string destination, CancellationToken cancellationToken = default)
+    {
+        using HttpResponseMessage response = await _http.PostAsJsonAsync(
+            "api/maintenance/backup",
+            new BackupRequest(destination),
+            JsonOptions,
+            cancellationToken);
+        return await ReadAsync<BackupResult>(response, cancellationToken);
+    }
+
     private async Task<T> GetAsync<T>(string uri, CancellationToken cancellationToken)
     {
         using HttpResponseMessage response = await _http.GetAsync(uri, cancellationToken);
@@ -186,6 +255,14 @@ public sealed class HttpSchedulerApiClient : ISchedulerApiClient
         return new SchedulerApiException((int)response.StatusCode, message, reason);
     }
 
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            throw await ErrorAsync(response, cancellationToken);
+        }
+    }
+
     private static void Add(List<string> query, string name, string? value)
     {
         if (!string.IsNullOrWhiteSpace(value))
@@ -199,4 +276,12 @@ public sealed class HttpSchedulerApiClient : ISchedulerApiClient
     private static string Query(List<string> parts) => parts.Count == 0 ? string.Empty : "?" + string.Join("&", parts);
 
     private sealed record RunResponse(Guid ExecutionId);
+
+    private sealed record SecretWrite(string Reference, string Value);
+
+    private sealed record SecretGrantRequest(string PluginId, string? JobId, string SecretReference);
+
+    private sealed record BackupRequest(string Destination);
+
+    private sealed record RevokeResponse(string Status);
 }

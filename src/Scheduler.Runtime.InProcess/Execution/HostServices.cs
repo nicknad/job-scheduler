@@ -1,4 +1,5 @@
 using Scheduler.Application.Observability;
+using Scheduler.Application.Secrets;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Secrets;
 
@@ -32,13 +33,25 @@ public sealed class NullExecutionLoggerFactory : IExecutionLoggerFactory
 }
 
 /// <summary>
-/// Denies every secret resolution until the per-plugin authorization policy
-/// lands (phase 6). Jobs that declare no secret references never touch it.
+/// Denies every secret resolution. Used by tests and backends without a secret
+/// store; jobs that declare no secret references never touch it.
 /// </summary>
 public sealed class DeniedSecretProvider : ISecretProvider
 {
     public Task<string> ResolveAsync(string secretReference, CancellationToken cancellationToken = default)
     {
         throw new SecretNotAuthorizedException(secretReference);
+    }
+}
+
+/// <summary>Provides a shared denying provider; used by tests and backends without secrets.</summary>
+public sealed class DeniedSecretProviderFactory : ISecretProviderFactory
+{
+    private static readonly DeniedSecretProvider Provider = new();
+
+    public Task<ISecretProvider> CreateAsync(ExecutionIdentity identity, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        return Task.FromResult<ISecretProvider>(Provider);
     }
 }

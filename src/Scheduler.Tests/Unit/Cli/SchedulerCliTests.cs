@@ -1,3 +1,4 @@
+using Scheduler.Application.Maintenance;
 using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
@@ -121,6 +122,80 @@ public sealed class SchedulerCliTests
         Assert.Contains("unknown", error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task BackupExitsDoneWhenVerified()
+    {
+        FakeClient client = new();
+        (int exitCode, string output, _) = await RunAsync(client, "backup", "--to", "/tmp/backup");
+
+        Assert.Equal(SchedulerCli.ExitDone, exitCode);
+        Assert.Contains("verified=True", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SecretSetReadsTheValueFromInput()
+    {
+        FakeClient client = new();
+        using StringReader input = new("some-value");
+        using StringWriter output = new();
+        using StringWriter error = new();
+
+        int exitCode = await SchedulerCli.RunAsync(
+            ["secret", "set", "ref"],
+            client,
+            input,
+            output,
+            error,
+            CancellationToken);
+
+        Assert.Equal(SchedulerCli.ExitDone, exitCode);
+        Assert.Contains("ref: set", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(("ref", "some-value"), client.Secrets);
+        Assert.DoesNotContain("some-value", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("some-value", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SecretSetWithEmptyInputExitsError()
+    {
+        FakeClient client = new();
+        using StringReader input = new(string.Empty);
+        using StringWriter output = new();
+        using StringWriter error = new();
+
+        int exitCode = await SchedulerCli.RunAsync(
+            ["secret", "set", "ref"],
+            client,
+            input,
+            output,
+            error,
+            CancellationToken);
+
+        Assert.Equal(SchedulerCli.ExitError, exitCode);
+        Assert.Empty(client.Secrets);
+    }
+
+    [Fact]
+    public async Task SecretGrantPrintsGranted()
+    {
+        FakeClient client = new();
+        (int exitCode, string output, _) = await RunAsync(client, "secret", "grant", "plugin-1", "ref", "--job", "job-1");
+
+        Assert.Equal(SchedulerCli.ExitDone, exitCode);
+        Assert.Contains("granted", output, StringComparison.Ordinal);
+        Assert.Contains(("plugin-1", "job-1", "ref"), client.Grants);
+    }
+
+    [Fact]
+    public async Task BackupNotVerifiedExitsNotDone()
+    {
+        FakeClient client = new() { BackupVerified = false };
+        (int exitCode, string output, _) = await RunAsync(client, "backup", "--to", "/tmp/backup");
+
+        Assert.Equal(SchedulerCli.ExitNotDone, exitCode);
+        Assert.Contains("verified=False", output, StringComparison.Ordinal);
+    }
+
     private static async Task<(int ExitCode, string Output, string Error)> RunAsync(
         ISchedulerApiClient client,
         params string[] args)
@@ -143,6 +218,12 @@ public sealed class SchedulerCliTests
             new ReconciliationCounts(2, 0, 3, DateTimeOffset.UnixEpoch));
 
         public SchedulerApiException? RunJobException { get; set; }
+
+        public bool BackupVerified { get; set; } = true;
+
+        public List<(string Reference, string Value)> Secrets { get; } = [];
+
+        public List<(string PluginId, string? JobId, string Reference)> Grants { get; } = [];
 
         public HealthReport Health { get; set; } = new(
             true,
@@ -199,5 +280,29 @@ public sealed class SchedulerCliTests
 
         public Task<PluginOperation> RemovePluginAsync(string pluginId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new PluginOperation(Guid.NewGuid(), pluginId, null, PluginOperationStatus.Succeeded));
+
+        public Task SetSecretAsync(string secretReference, string value, CancellationToken cancellationToken = default)
+        {
+            Secrets.Add((secretReference, value));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<string>> ListSecretReferencesAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task RemoveSecretAsync(string secretReference, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task GrantSecretAsync(string pluginId, string? jobId, string secretReference, CancellationToken cancellationToken = default)
+        {
+            Grants.Add((pluginId, jobId, secretReference));
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> RevokeSecretAsync(string pluginId, string? jobId, string secretReference, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        public Task<BackupResult> BackupAsync(string destination, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupResult(destination, 0, BackupVerified));
     }
 }

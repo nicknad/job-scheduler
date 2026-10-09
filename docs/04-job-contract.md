@@ -40,8 +40,7 @@ thrown execution exception is treated as retryable (transient/unknown).
 - Job, execution, and configuration-revision identifiers; correlation ID.
 - The pinned plugin id/version for this execution.
 - Validated parameters (serializable data only).
-- A **restricted** secret provider (only granted references resolve; the authorization policy
-  lands in phase 6).
+- A **restricted** secret provider (only granted references resolve).
 - A minimal logger and a progress reporter.
 - Deadline information; cancellation flows through the `CancellationToken`.
 

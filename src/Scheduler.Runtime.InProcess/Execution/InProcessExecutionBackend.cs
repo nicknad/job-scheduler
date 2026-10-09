@@ -8,23 +8,18 @@ namespace Scheduler.Runtime.InProcess.Execution;
 /// Builds the execution scope from a platform invocation and calls the handler
 /// directly. It never exposes scheduler internals; the handler sees only
 /// <see cref="JobExecutionContext" />, which is a contract type. The execution
-/// logger and progress reporter are created per execution from the factory so the
+/// logger and progress reporter are created per execution from the factory, and
+/// the secret provider is supplied by the runner (once per execution) so the
 /// singleton backend never carries per-execution state.
 /// </summary>
 public sealed class InProcessExecutionBackend : IExecutionBackend
 {
     private readonly IExecutionLoggerFactory _loggerFactory;
-    private readonly Contracts.Secrets.ISecretProvider _secrets;
 
-    public InProcessExecutionBackend(
-        IExecutionLoggerFactory loggerFactory,
-        Contracts.Secrets.ISecretProvider secrets)
+    public InProcessExecutionBackend(IExecutionLoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
-        ArgumentNullException.ThrowIfNull(secrets);
-
         _loggerFactory = loggerFactory;
-        _secrets = secrets;
     }
 
     public ExecutionMode Mode => ExecutionMode.InProcess;
@@ -52,7 +47,7 @@ public sealed class InProcessExecutionBackend : IExecutionBackend
             invocation.Parameters,
             _loggerFactory.CreateLogger(identity),
             _loggerFactory.CreateProgressReporter(identity),
-            _secrets);
+            invocation.Secrets);
 
         return invocation.Handler.ExecuteAsync(context, cancellationToken);
     }

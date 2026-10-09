@@ -1,3 +1,4 @@
+using Scheduler.Application.Maintenance;
 using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
@@ -40,6 +41,18 @@ public interface ISchedulerApiClient
     Task<PluginOperation> RollbackPluginAsync(string pluginId, Version version, CancellationToken cancellationToken = default);
 
     Task<PluginOperation> RemovePluginAsync(string pluginId, CancellationToken cancellationToken = default);
+
+    Task SetSecretAsync(string secretReference, string value, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<string>> ListSecretReferencesAsync(CancellationToken cancellationToken = default);
+
+    Task RemoveSecretAsync(string secretReference, CancellationToken cancellationToken = default);
+
+    Task GrantSecretAsync(string pluginId, string? jobId, string secretReference, CancellationToken cancellationToken = default);
+
+    Task<bool> RevokeSecretAsync(string pluginId, string? jobId, string secretReference, CancellationToken cancellationToken = default);
+
+    Task<BackupResult> BackupAsync(string destination, CancellationToken cancellationToken = default);
 }
 
 /// <summary>A non-success response from the management API, carrying the reason when present.</summary>

@@ -22,6 +22,9 @@ public sealed class PackagingOptions
 
     public string? LogsRoot { get; init; }
 
+    /// <summary>Root backups may be written to; the destination is confined to it.</summary>
+    public string BackupRoot { get; init; } = "data/backups";
+
     public int MaxEntryCount { get; init; } = PackagingLimits.Default.MaxEntryCount;
 
     public long MaxEntryUncompressedBytes { get; init; } = PackagingLimits.Default.MaxEntryUncompressedBytes;
@@ -38,7 +41,7 @@ public sealed class PackagingOptions
 
     /// <summary>Roots the host may write to; the signing key must live outside all of them.</summary>
     public IReadOnlyList<string> WritableRoots =>
-        new[] { DataRoot, ArtifactsRoot, StagingRoot, LogsRoot }
+        new[] { DataRoot, ArtifactsRoot, StagingRoot, LogsRoot, BackupRoot }
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(root => root!)
             .ToArray();

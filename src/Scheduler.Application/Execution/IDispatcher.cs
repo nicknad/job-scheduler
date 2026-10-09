@@ -1,5 +1,6 @@
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Plugins;
+using Scheduler.Contracts.Secrets;
 
 namespace Scheduler.Application.Execution;
 
@@ -20,7 +21,9 @@ public interface IDispatcher
 /// <summary>
 /// Everything a backend needs to build the execution scope and invoke a handler.
 /// It carries no scheduler internals; the backend constructs the
-/// <see cref="JobExecutionContext" /> from it.
+/// <see cref="JobExecutionContext" /> from it. The secret provider is created
+/// once per execution (not per attempt) so every retry keeps the value the
+/// execution acquired at dispatch.
 /// </summary>
 public sealed record ExecutionInvocation(
     IJobHandler Handler,
@@ -32,7 +35,8 @@ public sealed record ExecutionInvocation(
     DateTimeOffset ScheduledAt,
     DateTimeOffset Deadline,
     string CorrelationId,
-    IReadOnlyDictionary<string, string?> Parameters);
+    IReadOnlyDictionary<string, string?> Parameters,
+    ISecretProvider Secrets);
 
 /// <summary>
 /// A backend that executes jobs. In-process and worker backends implement the

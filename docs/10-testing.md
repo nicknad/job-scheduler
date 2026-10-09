@@ -34,9 +34,16 @@ xUnit v3 on the Microsoft Testing Platform (MTP), in `src/Scheduler.Tests`
 | 12 | Execution logs | Per-execution log entries captured and returned by `GET /api/executions/{id}/logs`; no secret values |
 | 13 | Recovery classification | Crash-left `Running` executions become `Interrupted` and are never auto-retried |
 | 14 | Health detail | `GET /api/health` reports DB reachability, reconciler last success, and stuck executions |
+| 15 | Secret rotation | Idle rotation is picked up by the next execution; rotation mid-flight does not change a running execution's held value |
+| 16 | API authentication | Unauthenticated and under-permissioned requests are rejected (401/403); a granted scope succeeds; loopback by default |
+| 17 | Operation idempotency | Replaying a lifecycle request's operation id returns the same result without re-executing |
+| 18 | Shutdown drain | In-flight execution completes under `Wait`; `Cancel` cancels it; interrupted drains re-enter from the operation record on restart |
+| 19 | Backup | A consistent backup restores artifact hashes and preserves lifecycle/activation state |
 
 ## Fixture rules
 
-No real secrets in tests — dummy references and a fake provider. Deterministic time via injected
-clocks for retry/misfire assertions where needed. Observability tests read the durable
-tables/logs through the repositories and the API/CLI seams, never from in-process meters.
+No real secrets in tests — dummy references and a fake value store / fake provider. Deterministic
+time via injected clocks for retry/misfire/rotation/drain assertions where needed. Observability
+tests read the durable tables/logs through the repositories and the API/CLI seams, never from
+in-process meters. Secret tests assert that no value appears in logs, audit entries, or execution
+result summaries.

@@ -5,6 +5,7 @@ using Scheduler.Application.Observability;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
+using Scheduler.Application.Secrets;
 using Scheduler.Contracts;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
@@ -28,7 +29,8 @@ internal sealed class RuntimeTestContext : IDisposable
     public RuntimeTestContext(
         string publicKeyPath,
         IPluginRuntime? runtime = null,
-        ExecutionOptions? executionOptions = null)
+        ExecutionOptions? executionOptions = null,
+        ISecretValueStore? secretValueStore = null)
     {
         _directory = Path.Combine(Path.GetTempPath(), "jobscheduler-runtime", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_directory);
@@ -51,6 +53,7 @@ internal sealed class RuntimeTestContext : IDisposable
         AuditWriter audit = new(_database.UnitOfWorkFactory, TimeProvider);
         Runtime = runtime ?? new InProcessPluginRuntime();
         RunningExecutions = new RunningExecutionRegistry(TimeProvider);
+        Shutdown = new ShutdownSignal();
         Gate = new ConcurrencyGate(ExecutionOptions);
         RetryEvaluator = new RetryPolicyEvaluator();
 
@@ -67,10 +70,11 @@ internal sealed class RuntimeTestContext : IDisposable
             RunningExecutions,
             ExecutionOptions);
 
-        IExecutionBackend backend = new InProcessExecutionBackend(
-            new NullExecutionLoggerFactory(),
-            new DeniedSecretProvider());
-        Runner = new ExecutionRunner(_database.UnitOfWorkFactory, backend, RetryEvaluator, TimeProvider);
+        IExecutionBackend backend = new InProcessExecutionBackend(new NullExecutionLoggerFactory());
+        ISecretProviderFactory secretProviderFactory = secretValueStore is null
+            ? new DeniedSecretProviderFactory()
+            : new RegistrySecretProviderFactory(_database.UnitOfWorkFactory, secretValueStore, audit);
+        Runner = new ExecutionRunner(_database.UnitOfWorkFactory, backend, secretProviderFactory, RetryEvaluator, TimeProvider);
         Dispatcher = new Dispatcher(
             _database.UnitOfWorkFactory,
             Runtime,
@@ -79,6 +83,7 @@ internal sealed class RuntimeTestContext : IDisposable
             Gate,
             RunningExecutions,
             new ExecutionRejectionWriter(_database.UnitOfWorkFactory, TimeProvider),
+            Shutdown,
             TimeProvider);
         Jobs = new JobManager(_database.UnitOfWorkFactory, Dispatcher, audit, TimeProvider);
     }
@@ -94,6 +99,8 @@ internal sealed class RuntimeTestContext : IDisposable
     public IPluginRuntime Runtime { get; }
 
     public IRunningExecutionRegistry RunningExecutions { get; }
+
+    public ShutdownSignal Shutdown { get; }
 
     public ConcurrencyGate Gate { get; }
 

@@ -170,17 +170,53 @@ flowchart TD
   HOSTLOG["Host logging: JSON console + rolling file"] --> LOGROOT[("LogsRoot/host-{date}.log")]
 ```
 
+## Secrets & authenticated API (Phase 6 — implemented)
+
+A plugin *declares* secret references; an administrator *grants* them as durable `secret_grants`
+rows. Values live only in the encrypted `FileSecretValueStore` (key material outside every writable
+root). Each execution gets its own restricted provider, so a running execution retains the value it
+acquired while new executions resolve the latest authorized value. Every resolution is audited as
+metadata (allowed/denied), never as a value. The management API authenticates every request with a
+bearer token whose value is a secret reference, checks a per-action scope, and honours
+`X-Operation-Id` idempotency.
+
+```mermaid
+flowchart TD
+  ADM(["Administrator"]) -- "secret grant/revoke, set/rotate" --> SAPI["Management API (secret-admin)"]
+  SAPI --> GRANTS[("registry: secret_grants")]
+  SAPI --> STORE[("encrypted secret store<br/>key file outside writable roots")]
+  DISP["Dispatcher dispatch"] --> FACT["RegistrySecretProviderFactory.CreateAsync<br/>(ExecutionIdentity)"]
+  FACT -- "read granted refs" --> GRANTS
+  FACT --> PROV["GrantedSecretProvider<br/>(per execution, caches acquired values)"]
+  PROV -- "granted? resolve" --> STORE
+  PROV -- "allowed / denied (metadata)" --> AUD[("audit log<br/>secret.access.allowed|denied")]
+  PROV --> CTX["JobExecutionContext.Secrets"]
+  CTX --> HDL["IJobHandler"]
+  CLI(["Operator"]) -- "Authorization: Bearer + X-Operation-Id" --> API["Management API"]
+  API --> AUTHZ{"authenticate + scope"}
+  AUTHZ -- "401/403" --> DENY["rejected (logged)"]
+  AUTHZ -- "authorized" --> OPS["lifecycle / read / backup"]
+  OPS --> IDEM[("registry: idempotency<br/>operation id → result")]
+```
+
 ## Modules & layering
 
 ```mermaid
 flowchart LR
   subgraph Ctrl["Control plane (implemented)"]
     CLI["Scheduler.Cli"] --> API["Management API (Host)"]
+    API --> AUTH["Bearer auth + scope filter"]
     API --> PM["Plugin Manager"]
     API --> JM["Job Manager"]
+    API --> SMA["Secret Admin"]
+    API --> BAK["Backup"]
     PM --> REG[("Registry: SQLite")]
     JM --> REG
+    SMA --> REG
+    SMA --> SSTORE[("Encrypted secret store")]
     PM --> ART[("Artifact store")]
+    BAK --> REG
+    BAK --> ART
     FILTER["Host post-lifecycle filter"] --> RECON
     PERIODIC["ReconciliationService"] --> RECON
     RECON["ScheduleReconciler (Application)"] --> REG
@@ -195,6 +231,9 @@ flowchart LR
     BRIDGE --> DISP["Dispatcher"]
     RUN["Job Manager (manual run)"] --> DISP
     DISP --> RT["Runtime.InProcess"]
+    RT --> SPF["ISecretProviderFactory"]
+    SPF --> REG
+    SPF --> SSTORE
     DISP -. "phase 8" .-> RWK["Runtime.Worker"]
     RT --> EXC[("Execution store")]
   end
@@ -214,5 +253,4 @@ Quartz types stay inside `Scheduler.Infrastructure` (and the Host composition ro
 reaches Quartz only through the application-owned `IScheduleStore` port, so `Scheduler.Application`
 and `Scheduler.Contracts` remain Quartz-free.
 
-Planned in later phases: authenticated management-API surface and secret authorization (phase 6),
-and the worker backend (phase 8).
+Planned in a later phase: the worker backend and worker identity authorization (phase 8).

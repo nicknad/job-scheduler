@@ -1,6 +1,9 @@
 using Scheduler.Cli;
 
-string[] commandArgs = StripApiArgument(args, out string baseUrl);
+string baseUrl = Environment.GetEnvironmentVariable("SCHEDULER_API_URL") ?? "http://localhost:5000";
+string? token = Environment.GetEnvironmentVariable("SCHEDULER_API_TOKEN");
+string[] commandArgs = StripOptions(args, ref baseUrl, ref token);
+
 using HttpClient http = new()
 {
     BaseAddress = new Uri(baseUrl, UriKind.Absolute),
@@ -9,20 +12,26 @@ using HttpClient http = new()
 
 return await SchedulerCli.RunAsync(
     commandArgs,
-    new HttpSchedulerApiClient(http),
+    new HttpSchedulerApiClient(http, token),
+    Console.In,
     Console.Out,
     Console.Error,
     CancellationToken.None);
 
-static string[] StripApiArgument(string[] args, out string baseUrl)
+static string[] StripOptions(string[] args, ref string baseUrl, ref string? token)
 {
-    baseUrl = Environment.GetEnvironmentVariable("SCHEDULER_API_URL") ?? "http://localhost:5000";
     List<string> remaining = [];
     for (int index = 0; index < args.Length; index++)
     {
         if (args[index] == "--api" && index + 1 < args.Length)
         {
             baseUrl = args[++index];
+            continue;
+        }
+
+        if (args[index] == "--token" && index + 1 < args.Length)
+        {
+            token = args[++index];
             continue;
         }
 

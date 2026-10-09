@@ -46,6 +46,7 @@ token) rather than only thrown:
 | `NoActiveVersion` | the job's plugin has no active version |
 | `NoHandler` | active plugin version resolves no handler for the job |
 | `Concurrency` | admission was abandoned while waiting for a concurrency slot; the default gate queues rather than rejecting, so this is recorded only when a waiter is cancelled |
+| `ShuttingDown` | the host is shutting down and stopped accepting fire times |
 
 ## Correlation identifiers
 
@@ -94,22 +95,42 @@ applicable. No third-party logging dependency is used.
 
 ## API surface
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/executions?jobId=&status=&since=&until=&limit=` | execution history with filters |
-| `GET /api/jobs/{id}/executions` | one job's executions |
-| `GET /api/executions/summary?window=` | **centerpiece**: done/not-done counts + reasons |
-| `GET /api/executions/{id}` | one execution with its correlation id, result summary, and cancellation reason |
-| `GET /api/executions/{id}/logs` | captured per-execution log entries |
-| `GET /api/audit?actor=&action=&target=&since=&limit=` | real, filterable audit trail |
-| `GET /api/health` | detail: DB reachable, reconciler last success, stuck executions |
-| `GET /healthz` | liveness only (unchanged) |
+All `/api` endpoints require a bearer token ([08-security.md](08-security.md)); each mutation carries
+its own permission scope. Lifecycle mutations accept an `X-Operation-Id` header for
+operation-scoped idempotency.
+`/healthz` stays unauthenticated (liveness only).
+
+| Endpoint | Scope | Purpose |
+| --- | --- | --- |
+| `GET /api/executions?jobId=&status=&since=&until=&limit=` | `read` | execution history with filters |
+| `GET /api/jobs/{id}/executions` | `read` | one job's executions |
+| `GET /api/executions/summary?window=` | `read` | **centerpiece**: done/not-done counts + reasons |
+| `GET /api/executions/{id}` | `read` | one execution with its correlation id, result summary, and cancellation reason |
+| `GET /api/executions/{id}/logs` | `read` | captured per-execution log entries |
+| `GET /api/audit?actor=&action=&target=&since=&limit=` | `read` | real, filterable audit trail |
+| `GET /api/health` | `read` | detail: DB reachable, reconciler last success, stuck executions |
+| `POST /api/plugins` | `install` | stage + validate a package |
+| `POST /api/plugins/{id}/{version}/validate` | `validate` | re-validate a version |
+| `POST /api/plugins/{id}/{version}/activate` | `activate` | activate |
+| `POST /api/plugins/{id}/deactivate` | `deactivate` | deactivate |
+| `POST /api/plugins/{id}/{version}/rollback` | `rollback` | rollback |
+| `POST /api/plugins/{id}/remove` | `remove` | remove |
+| `POST /api/jobs/{id}/run` | `manual-run` | manual run |
+| `POST /api/secrets` | `secret-admin` | set/rotate a value (reference + metadata only in output) |
+| `GET /api/secrets` | `secret-admin` | list stored references (never values) |
+| `GET /api/secrets/grants?pluginId=` | `secret-admin` | list grants for a plugin |
+| `DELETE /api/secrets/{reference}` | `secret-admin` | remove a value |
+| `POST /api/secrets/grants` | `secret-admin` | grant a reference to a plugin/job |
+| `DELETE /api/secrets/grants` | `secret-admin` | revoke a grant |
+| `POST /api/maintenance/backup` | `secret-admin` | consistent DB checkpoint + artifact snapshot + verify |
+| `POST /api/executions/{id}/cancel` | `manual-run` | cooperative cancellation |
+| `GET /healthz` | — | liveness only (unchanged) |
 
 ## CLI surface
 
 `Scheduler.Cli` is a thin HTTP client (base URL from `--api` argument or `SCHEDULER_API_URL`,
-default `http://localhost:5000`). It re-implements no logic and returns meaningful exit codes:
-`0` = done, non-zero = failed/not-done.
+default `http://localhost:5000`; bearer token from `--token` or `SCHEDULER_API_TOKEN`). It
+re-implements no logic and returns meaningful exit codes: `0` = done, non-zero = failed/not-done.
 
 | Command | Behavior |
 | --- | --- |
@@ -122,6 +143,9 @@ default `http://localhost:5000`). It re-implements no logic and returns meaningf
 | `audit tail` | recent audit entries |
 | `health` | health detail |
 | `plugin list` / `plugin install/validate/activate/deactivate/rollback/remove` | lifecycle |
+| `secret set <reference>` / `secret list` / `secret remove <reference>` | secret values (metadata only out) |
+| `secret grant <pluginId> <reference> [--job <id>]` / `secret revoke ...` | grants |
+| `backup --to <dir>` | consistent backup + verification |
 
 ## Health
 
@@ -133,14 +157,31 @@ Liveness stays at `/healthz`. Operational health (`GET /api/health`) reports:
 - **stuck executions** — count of `Running` executions whose `started_at` is older than the
   configured heartbeat threshold, and the affected ids.
 
-A stuck execution is surfaced, not auto-killed; heartbeat monitoring and drain-timeout shutdown
-land with secrets/hardening. `/healthz` stays a liveness probe; the operational checks above are
-computed by `IHealthReportService` and exposed only at `GET /api/health`.
+A stuck execution is surfaced, not auto-killed. A `StuckExecutionMonitor` hosted service re-checks
+the threshold on an interval and logs the stuck executions it finds (metadata only); the same
+threshold backs `GET /api/health`. There are no metrics. `/healthz` stays a liveness probe; the
+operational checks above are computed by `IHealthReportService` and exposed only at `GET /api/health`.
+
+## Secret-access audit
+
+Each secret store resolution is audited as metadata, never as a value (a value already acquired by
+a running execution is cached and not re-audited):
+
+| Action | When | Details |
+| --- | --- | --- |
+| `secret.access.allowed` | a granted reference resolves for an execution | plugin/job/execution id, reference |
+| `secret.access.denied` | an ungranted (or unavailable) reference is requested | plugin/job/execution id, reference, reason |
+| `secret.grant` / `secret.revoke` | an administrator changes a grant | plugin/job, reference |
+| `secret.set` / `secret.remove` | an administrator sets/rotates/removes a value | reference only |
 
 ## Recovery and resilience
 
 - Startup: apply pending migrations → **classify `Interrupted`** (before the host serves requests) →
   the reconciler runs its startup sweep in the hosted service before new fire times are accepted.
 - Preserve active plugin versions when a new version fails validation or activation.
-- Graceful shutdown: stop accepting fire times, apply the drain timeout, then exit.
+- **Graceful shutdown**: stop accepting fire times, apply the configured drain policy and timeout to
+  running executions, then exit. Under `Wait` the host waits up to `ExecutionOptions.DrainTimeout`
+  for in-flight executions; under `Cancel` it cooperatively cancels them first. Shutdown is logged,
+  and durable state stays consistent: a drain interrupted by a kill re-enters from the durable
+  operation records on the next startup reconcile.
 - Backups: consistent database + artifacts ([07-persistence.md](07-persistence.md)).

@@ -1,4 +1,6 @@
 using Scheduler.Application.Observability;
+using Scheduler.Application.Secrets;
+using Scheduler.Application.Security;
 
 namespace Scheduler.Application.Persistence;
 
@@ -24,6 +26,10 @@ public interface IRegistryUnitOfWork : IAsyncDisposable
     IScheduleEventRepository ScheduleEvents { get; }
 
     IReconciliationRunRepository ReconciliationRuns { get; }
+
+    ISecretGrantRepository SecretGrants { get; }
+
+    IIdempotencyStore Idempotency { get; }
 
     Task CommitAsync(CancellationToken cancellationToken = default);
 

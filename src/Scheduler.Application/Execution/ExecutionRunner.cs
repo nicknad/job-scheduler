@@ -1,6 +1,9 @@
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
+using Scheduler.Application.Secrets;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Plugins;
+using Scheduler.Contracts.Secrets;
 
 namespace Scheduler.Application.Execution;
 
@@ -33,22 +36,26 @@ public sealed class ExecutionRunner
 {
     private readonly IRegistryUnitOfWorkFactory _unitOfWorkFactory;
     private readonly IExecutionBackend _backend;
+    private readonly ISecretProviderFactory _secretProviderFactory;
     private readonly RetryPolicyEvaluator _retryEvaluator;
     private readonly TimeProvider _timeProvider;
 
     public ExecutionRunner(
         IRegistryUnitOfWorkFactory unitOfWorkFactory,
         IExecutionBackend backend,
+        ISecretProviderFactory secretProviderFactory,
         RetryPolicyEvaluator retryEvaluator,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(unitOfWorkFactory);
         ArgumentNullException.ThrowIfNull(backend);
+        ArgumentNullException.ThrowIfNull(secretProviderFactory);
         ArgumentNullException.ThrowIfNull(retryEvaluator);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _unitOfWorkFactory = unitOfWorkFactory;
         _backend = backend;
+        _secretProviderFactory = secretProviderFactory;
         _retryEvaluator = retryEvaluator;
         _timeProvider = timeProvider;
     }
@@ -73,6 +80,14 @@ public sealed class ExecutionRunner
             ScheduledAt = request.ScheduledAt,
         };
         await CreateAsync(record);
+
+        ExecutionIdentity identity = new(
+            request.ExecutionId,
+            request.CorrelationId,
+            request.JobId,
+            request.PluginId,
+            request.PluginVersion);
+        ISecretProvider secrets = await _secretProviderFactory.CreateAsync(identity, CancellationToken.None);
 
         DateTimeOffset? startedAt = null;
         int attempt = 1;
@@ -105,7 +120,8 @@ public sealed class ExecutionRunner
                         request.ScheduledAt,
                         now.Add(request.Timeout),
                         request.CorrelationId,
-                        request.Parameters),
+                        request.Parameters,
+                        secrets),
                     linked.Token);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
@@ -120,6 +136,11 @@ public sealed class ExecutionRunner
                 cancellationReason = running.CancellationReason ?? "Execution was cancelled.";
                 summary = cancellationReason;
                 break;
+            }
+            catch (SecretNotAuthorizedException exception)
+            {
+                // An authorization denial is permanent for this execution; never retry it.
+                result = JobResult.Failed(ErrorSanitizer.Sanitize(exception), retryable: false);
             }
             catch (Exception exception)
             {
