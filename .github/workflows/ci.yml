@@ -45,5 +45,9 @@ jobs:
       - name: Set up PackageGuard
         run: dotnet tool install --global PackageGuard --version 2.9.1
 
+      - name: Add .NET tools to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $HOME '.dotnet' 'tools')
+
       - name: PackageGuard
         run: packageguard
