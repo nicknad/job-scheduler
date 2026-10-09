@@ -1,3 +1,4 @@
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
 using Scheduler.Contracts.Jobs;
@@ -14,9 +15,10 @@ namespace Scheduler.Application.Reconciliation;
 /// </list>
 /// It is the only component that reaches the scheduler store; the plugin and job managers
 /// publish durable outbox records and never touch Quartz themselves. Sweeps are serialized so
-/// the periodic loop and the post-lifecycle trigger cannot race each other.
+/// the periodic loop and the post-lifecycle trigger cannot race each other. Each sweep's
+/// outcome is recorded durably and exposed via <see cref="IReconciliationStatus" />.
 /// </summary>
-public sealed class ScheduleReconciler : IReconciler, IDisposable
+public sealed class ScheduleReconciler : IReconciler, IReconciliationStatus, IDisposable
 {
     private const string Actor = "reconciler";
 
@@ -25,6 +27,10 @@ public sealed class ScheduleReconciler : IReconciler, IDisposable
     private readonly IAuditWriter _auditWriter;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _statusLock = new();
+    private DateTimeOffset? _lastSucceededAt;
+    private DateTimeOffset? _lastFailedAt;
+    private int _lastErrorCount;
 
     public ScheduleReconciler(
         IRegistryUnitOfWorkFactory unitOfWorkFactory,
@@ -84,7 +90,41 @@ public sealed class ScheduleReconciler : IReconciler, IDisposable
         synchronized += await RepairDriftAsync(errors, cancellationToken);
 
         await RecordOutcomeAsync(completed, rolledBack, synchronized, errors, cancellationToken);
+        await RecordRunAsync(completed, rolledBack, synchronized, errors.Count, cancellationToken);
         return new ReconciliationResult(completed, rolledBack, synchronized, errors);
+    }
+
+    public DateTimeOffset? LastSucceededAt
+    {
+        get
+        {
+            lock (_statusLock)
+            {
+                return _lastSucceededAt;
+            }
+        }
+    }
+
+    public DateTimeOffset? LastFailedAt
+    {
+        get
+        {
+            lock (_statusLock)
+            {
+                return _lastFailedAt;
+            }
+        }
+    }
+
+    public int LastErrorCount
+    {
+        get
+        {
+            lock (_statusLock)
+            {
+                return _lastErrorCount;
+            }
+        }
     }
 
     private async Task<IReadOnlyList<OperationState>> ReconcileLifecycleOperationsAsync(
@@ -391,6 +431,44 @@ public sealed class ScheduleReconciler : IReconciler, IDisposable
             "scheduler",
             $"completed={completed};rolledBack={rolledBack};synchronized={synchronized};errors={errors.Count}",
             cancellationToken);
+    }
+
+    private async Task RecordRunAsync(
+        int completed,
+        int rolledBack,
+        int synchronized,
+        int errorCount,
+        CancellationToken cancellationToken)
+    {
+        bool succeeded = errorCount == 0;
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+
+        await using IRegistryUnitOfWork unitOfWork = await _unitOfWorkFactory.BeginAsync(cancellationToken);
+        await unitOfWork.ReconciliationRuns.RecordAsync(
+            new ReconciliationRun
+            {
+                Timestamp = now,
+                Completed = completed,
+                RolledBack = rolledBack,
+                Synchronized = synchronized,
+                ErrorCount = errorCount,
+                Succeeded = succeeded,
+            },
+            cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
+
+        lock (_statusLock)
+        {
+            _lastErrorCount = errorCount;
+            if (succeeded)
+            {
+                _lastSucceededAt = now;
+            }
+            else
+            {
+                _lastFailedAt = now;
+            }
+        }
     }
 
     private static (string PluginId, Version? Version) ReadLifecycleIdentity(OperationRecord operation)

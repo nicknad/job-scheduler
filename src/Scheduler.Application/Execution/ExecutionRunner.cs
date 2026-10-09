@@ -15,6 +15,7 @@ public sealed record ExecutionRequest(
     Version PluginVersion,
     int ConfigurationRevision,
     Guid ExecutionId,
+    string CorrelationId,
     DateTimeOffset ScheduledAt,
     IReadOnlyDictionary<string, string?> Parameters,
     TimeSpan Timeout,
@@ -68,6 +69,7 @@ public sealed class ExecutionRunner
             ConfigurationRevision = request.ConfigurationRevision,
             Attempt = 1,
             Status = JobExecutionStatus.Pending,
+            CorrelationId = request.CorrelationId,
             ScheduledAt = request.ScheduledAt,
         };
         await CreateAsync(record);
@@ -102,7 +104,7 @@ public sealed class ExecutionRunner
                         request.ConfigurationRevision,
                         request.ScheduledAt,
                         now.Add(request.Timeout),
-                        request.ExecutionId.ToString("N"),
+                        request.CorrelationId,
                         request.Parameters),
                     linked.Token);
             }

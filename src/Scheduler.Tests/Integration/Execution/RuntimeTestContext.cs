@@ -1,6 +1,7 @@
 using System.IO.Abstractions;
 using Scheduler.Application.Execution;
 using Scheduler.Application.JobManagement;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
@@ -67,8 +68,7 @@ internal sealed class RuntimeTestContext : IDisposable
             ExecutionOptions);
 
         IExecutionBackend backend = new InProcessExecutionBackend(
-            new NullJobExecutionLogger(),
-            new NullJobProgressReporter(),
+            new NullExecutionLoggerFactory(),
             new DeniedSecretProvider());
         Runner = new ExecutionRunner(_database.UnitOfWorkFactory, backend, RetryEvaluator, TimeProvider);
         Dispatcher = new Dispatcher(
@@ -78,8 +78,9 @@ internal sealed class RuntimeTestContext : IDisposable
             Runner,
             Gate,
             RunningExecutions,
+            new ExecutionRejectionWriter(_database.UnitOfWorkFactory, TimeProvider),
             TimeProvider);
-        Jobs = new JobManager(_database.UnitOfWorkFactory, Dispatcher, TimeProvider);
+        Jobs = new JobManager(_database.UnitOfWorkFactory, Dispatcher, audit, TimeProvider);
     }
 
     public IFileSystem FileSystem { get; }

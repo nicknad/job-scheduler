@@ -23,6 +23,13 @@ public sealed record ExecutionRecord
 
     public required JobExecutionStatus Status { get; init; }
 
+    /// <summary>
+    /// Correlation id generated at dispatch; links execution history, the
+    /// per-execution log, and audit events. Null for rows written before the
+    /// column existed.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
     public required DateTimeOffset ScheduledAt { get; init; }
 
     public DateTimeOffset? StartedAt { get; init; }

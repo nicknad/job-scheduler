@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Scheduler.Application\Scheduler.Application.csproj" />
+    <ProjectReference Include="..\Scheduler.Cli\Scheduler.Cli.csproj" />
     <ProjectReference Include="..\Scheduler.Contracts\Scheduler.Contracts.csproj" />
     <ProjectReference Include="..\Scheduler.Infrastructure\Scheduler.Infrastructure.csproj" />
     <ProjectReference Include="..\Scheduler.Runtime.InProcess\Scheduler.Runtime.InProcess.csproj" />

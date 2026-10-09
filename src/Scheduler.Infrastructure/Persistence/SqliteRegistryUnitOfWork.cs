@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 
 namespace Scheduler.Infrastructure.Persistence;
@@ -14,7 +15,10 @@ internal sealed partial class SqliteRegistryUnitOfWork :
     IJobRepository,
     IExecutionRepository,
     IOperationRepository,
-    IAuditLogRepository
+    IAuditLogRepository,
+    IExecutionRejectionRepository,
+    IScheduleEventRepository,
+    IReconciliationRunRepository
 {
     private readonly ISqliteConnectionFactory _connectionFactory;
     private SqliteConnection? _connection;
@@ -36,6 +40,12 @@ internal sealed partial class SqliteRegistryUnitOfWork :
     public IOperationRepository Operations => this;
 
     public IAuditLogRepository Audit => this;
+
+    public IExecutionRejectionRepository Rejections => this;
+
+    public IScheduleEventRepository ScheduleEvents => this;
+
+    public IReconciliationRunRepository ReconciliationRuns => this;
 
     public async Task CommitAsync(CancellationToken cancellationToken = default)
     {

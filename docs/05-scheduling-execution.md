@@ -86,6 +86,10 @@ Cron triggers cannot express "abandon the scheduled time", so `RunImmediately` c
 dispatcher independently rejects a dispatch of a disabled job. A job whose plugin has no active
 version is likewise treated as unschedulable and has its trigger removed.
 
+Every scheduled fire, misfire, and skip is recorded durably (`schedule_events`) by the Quartz
+trigger listener, and every refused dispatch is recorded with its reason (`execution_rejections`);
+see [09-observability-operations.md](09-observability-operations.md).
+
 ## Execution tracking
 
 Every execution has a unique `executionId` and a durable record:

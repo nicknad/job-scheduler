@@ -101,6 +101,43 @@ public static class SchemaDefinitions
         );
         """;
 
+    /// <summary>Durable records of dispatches that were not admitted, with the reason.</summary>
+    public const string ExecutionRejections = """
+        CREATE TABLE IF NOT EXISTS execution_rejections (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp      TEXT NOT NULL,
+            job_id         TEXT NOT NULL,
+            plugin_id      TEXT,
+            reason         TEXT NOT NULL,
+            correlation_id TEXT NOT NULL,
+            details        TEXT
+        );
+        """;
+
+    /// <summary>Durable records of scheduled fires, misses, and skips observed from Quartz.</summary>
+    public const string ScheduleEvents = """
+        CREATE TABLE IF NOT EXISTS schedule_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp      TEXT NOT NULL,
+            job_id         TEXT NOT NULL,
+            event_kind     TEXT NOT NULL,
+            misfire_policy TEXT
+        );
+        """;
+
+    /// <summary>Durable history of reconciliation sweeps and their outcomes.</summary>
+    public const string ReconciliationRuns = """
+        CREATE TABLE IF NOT EXISTS reconciliation_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    TEXT NOT NULL,
+            completed    INTEGER NOT NULL,
+            rolled_back  INTEGER NOT NULL,
+            synchronized INTEGER NOT NULL,
+            error_count  INTEGER NOT NULL,
+            succeeded    INTEGER NOT NULL
+        );
+        """;
+
     public static readonly string[] All =
     [
         PluginRegistry,

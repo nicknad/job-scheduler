@@ -8,7 +8,7 @@ internal static class DbTimestamp
     private const string RoundTripFormat = "o";
 
     public static string Format(DateTimeOffset value) =>
-        value.ToString(RoundTripFormat, CultureInfo.InvariantCulture);
+        value.ToUniversalTime().ToString(RoundTripFormat, CultureInfo.InvariantCulture);
 
     public static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);

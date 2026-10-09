@@ -1,4 +1,6 @@
+using Scheduler.Application.Execution;
 using Scheduler.Application.JobManagement;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
@@ -71,6 +73,53 @@ public sealed class JobManagerTests
         ExecutionRecord? execution = await context.ReadExecutionAsync(executionId, CancellationToken);
         Assert.NotNull(execution);
         Assert.Equal(JobExecutionStatus.Succeeded, execution.Status);
+    }
+
+    [Fact]
+    public async Task RunNowRecordsAManualRunAuditEntry()
+    {
+        using TestPackageKey key = TestPackageKey.CreateRsa();
+        using RuntimeTestContext context = new(
+            key.PublicKeyPath,
+            new FakePluginRuntime(new ScriptedJobHandler((_, _) => Task.FromResult(JobResult.Succeeded()))));
+        await context.InitializeAsync(CancellationToken);
+        await context.SeedActivePluginAsync("test-plugin", new Version(1, 0, 0), Definition(), CancellationToken);
+
+        Guid executionId = await context.Jobs.RunNowAsync("test-job", CancellationToken);
+
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        IReadOnlyList<AuditEntry> entries = await unitOfWork.Audit.ListAsync(
+            new AuditFilter { Action = "job.run" },
+            CancellationToken);
+        AuditEntry entry = Assert.Single(entries);
+        Assert.Equal("test-job", entry.Target);
+        Assert.Contains(executionId.ToString("D"), entry.Details ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectedRunRecordsARejectedAuditEntry()
+    {
+        using TestPackageKey key = TestPackageKey.CreateRsa();
+        using RuntimeTestContext context = new(
+            key.PublicKeyPath,
+            new FakePluginRuntime(new ScriptedJobHandler((_, _) => Task.FromResult(JobResult.Succeeded()))));
+        await context.InitializeAsync(CancellationToken);
+        await context.SeedActivePluginAsync(
+            "test-plugin",
+            new Version(1, 0, 0),
+            Definition() with { Enabled = false },
+            CancellationToken);
+
+        await Assert.ThrowsAsync<DispatchRejectedException>(
+            () => context.Jobs.RunNowAsync("test-job", CancellationToken));
+
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        IReadOnlyList<AuditEntry> entries = await unitOfWork.Audit.ListAsync(
+            new AuditFilter { Action = "job.run.rejected" },
+            CancellationToken);
+        AuditEntry entry = Assert.Single(entries);
+        Assert.Equal("test-job", entry.Target);
+        Assert.Contains("Disabled", entry.Details ?? string.Empty, StringComparison.Ordinal);
     }
 
     private static async Task<int> ReadRevisionAsync(RuntimeTestContext context)

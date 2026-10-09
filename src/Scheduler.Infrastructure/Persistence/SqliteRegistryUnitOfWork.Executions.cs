@@ -1,4 +1,6 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Contracts.Execution;
 
@@ -8,7 +10,7 @@ internal sealed partial class SqliteRegistryUnitOfWork
 {
     private const string ExecutionColumns =
         "execution_id, job_id, plugin_id, plugin_version, config_revision, attempt, status, " +
-        "scheduled_at, started_at, ended_at, result_summary, cancellation_reason";
+        "correlation_id, scheduled_at, started_at, ended_at, result_summary, cancellation_reason";
 
     async Task<ExecutionRecord?> IExecutionRepository.GetAsync(
         Guid executionId,
@@ -46,6 +48,62 @@ internal sealed partial class SqliteRegistryUnitOfWork
         return await ReadExecutionsAsync(command, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ExecutionRecord>> ListAsync(
+        ExecutionFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(filter.Limit);
+
+        StringBuilder sql = new("SELECT " + ExecutionColumns + " FROM executions WHERE 1 = 1");
+        if (filter.JobId is not null)
+        {
+            sql.Append(" AND job_id = $jobId");
+        }
+
+        if (filter.Status is not null)
+        {
+            sql.Append(" AND status = $status");
+        }
+
+        if (filter.Since is not null)
+        {
+            sql.Append(" AND scheduled_at >= $since");
+        }
+
+        if (filter.Until is not null)
+        {
+            sql.Append(" AND scheduled_at <= $until");
+        }
+
+        sql.Append(" ORDER BY scheduled_at DESC LIMIT $limit;");
+
+        await using SqliteCommand command = CreateCommand(sql.ToString());
+        if (filter.JobId is not null)
+        {
+            command.Parameters.AddWithValue("$jobId", filter.JobId);
+        }
+
+        if (filter.Status is not null)
+        {
+            command.Parameters.AddWithValue("$status", filter.Status.Value.ToString());
+        }
+
+        if (filter.Since is not null)
+        {
+            command.Parameters.AddWithValue("$since", DbTimestamp.Format(filter.Since.Value));
+        }
+
+        if (filter.Until is not null)
+        {
+            command.Parameters.AddWithValue("$until", DbTimestamp.Format(filter.Until.Value));
+        }
+
+        command.Parameters.AddWithValue("$limit", filter.Limit);
+
+        return await ReadExecutionsAsync(command, cancellationToken);
+    }
+
     public async Task CreateAsync(ExecutionRecord execution, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(execution);
@@ -54,10 +112,10 @@ internal sealed partial class SqliteRegistryUnitOfWork
             """
             INSERT INTO executions
                 (execution_id, job_id, plugin_id, plugin_version, config_revision, attempt, status,
-                 scheduled_at, started_at, ended_at, result_summary, cancellation_reason)
+                 correlation_id, scheduled_at, started_at, ended_at, result_summary, cancellation_reason)
             VALUES
                 ($executionId, $jobId, $pluginId, $pluginVersion, $configRevision, $attempt, $status,
-                 $scheduledAt, $startedAt, $endedAt, $resultSummary, $cancellationReason);
+                 $correlationId, $scheduledAt, $startedAt, $endedAt, $resultSummary, $cancellationReason);
             """);
         AddExecutionParameters(command, execution);
 
@@ -100,6 +158,26 @@ internal sealed partial class SqliteRegistryUnitOfWork
         }
     }
 
+    public async Task<int> MarkRunningAsInterruptedAsync(
+        DateTimeOffset interruptedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using SqliteCommand command = CreateCommand(
+            """
+            UPDATE executions
+               SET status = $interrupted,
+                   ended_at = $endedAt,
+                   result_summary = COALESCE(result_summary, $summary)
+             WHERE status = $running;
+            """);
+        command.Parameters.AddWithValue("$interrupted", JobExecutionStatus.Interrupted.ToString());
+        command.Parameters.AddWithValue("$running", JobExecutionStatus.Running.ToString());
+        command.Parameters.AddWithValue("$endedAt", DbTimestamp.Format(interruptedAt));
+        command.Parameters.AddWithValue("$summary", "Host stopped while the execution was running.");
+
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static void AddExecutionParameters(SqliteCommand command, ExecutionRecord execution)
     {
         command.Parameters.AddWithValue("$executionId", execution.ExecutionId.ToString("D"));
@@ -109,6 +187,7 @@ internal sealed partial class SqliteRegistryUnitOfWork
         command.Parameters.AddWithValue("$configRevision", execution.ConfigurationRevision);
         command.Parameters.AddWithValue("$attempt", execution.Attempt);
         command.Parameters.AddWithValue("$status", execution.Status.ToString());
+        command.Parameters.AddWithValue("$correlationId", execution.CorrelationId ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$scheduledAt", DbTimestamp.Format(execution.ScheduledAt));
         command.Parameters.AddWithValue(
             "$startedAt",
@@ -145,10 +224,11 @@ internal sealed partial class SqliteRegistryUnitOfWork
         ConfigurationRevision = reader.GetInt32(4),
         Attempt = reader.GetInt32(5),
         Status = Enum.Parse<JobExecutionStatus>(reader.GetString(6)),
-        ScheduledAt = DbTimestamp.Parse(reader.GetString(7)),
-        StartedAt = reader.IsDBNull(8) ? null : DbTimestamp.Parse(reader.GetString(8)),
-        EndedAt = reader.IsDBNull(9) ? null : DbTimestamp.Parse(reader.GetString(9)),
-        ResultSummary = reader.IsDBNull(10) ? null : reader.GetString(10),
-        CancellationReason = reader.IsDBNull(11) ? null : reader.GetString(11),
+        CorrelationId = reader.IsDBNull(7) ? null : reader.GetString(7),
+        ScheduledAt = DbTimestamp.Parse(reader.GetString(8)),
+        StartedAt = reader.IsDBNull(9) ? null : DbTimestamp.Parse(reader.GetString(9)),
+        EndedAt = reader.IsDBNull(10) ? null : DbTimestamp.Parse(reader.GetString(10)),
+        ResultSummary = reader.IsDBNull(11) ? null : reader.GetString(11),
+        CancellationReason = reader.IsDBNull(12) ? null : reader.GetString(12),
     };
 }

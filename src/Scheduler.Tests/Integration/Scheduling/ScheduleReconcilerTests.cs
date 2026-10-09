@@ -1,4 +1,5 @@
 using Quartz;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.Reconciliation;
 using Scheduler.Contracts.Execution;
@@ -317,5 +318,42 @@ public sealed class ScheduleReconcilerTests
 
         string jobId = await context.Dispatcher.FirstDispatch.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken);
         Assert.Equal("job-1", jobId);
+    }
+
+    [Fact]
+    public async Task FiringARecordsADurableScheduleEvent()
+    {
+        await using QuartzScheduleTestContext context = await QuartzScheduleTestContext.CreateAsync(cancellationToken: CancellationToken);
+        await context.SeedActivePluginAsync("plugin-1", new Version(1, 0, 0), CancellationToken);
+        JobDefinition definition = ScheduleTestData.Definition() with
+        {
+            Schedule = ScheduleSpec.FromOneShot(DateTimeOffset.UtcNow.AddSeconds(1)),
+        };
+        await context.SeedJobAsync(ScheduleTestData.Record(definition), CancellationToken);
+
+        await context.Reconciler.ReconcileAsync(CancellationToken);
+        await context.Dispatcher.FirstDispatch.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken);
+
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        ScheduleEventCounts counts = await unitOfWork.ScheduleEvents.CountAsync(since: null, CancellationToken);
+        Assert.Equal(1, counts.Fired);
+    }
+
+    [Fact]
+    public async Task RecordsAReconciliationRunAndUpdatesStatus()
+    {
+        await using QuartzScheduleTestContext context = await QuartzScheduleTestContext.CreateAsync(cancellationToken: CancellationToken);
+        await context.SeedActivePluginAsync("plugin-1", new Version(1, 0, 0), CancellationToken);
+        await context.SeedJobAsync(ScheduleTestData.Record(ScheduleTestData.Definition()), CancellationToken);
+
+        await context.Reconciler.ReconcileAsync(CancellationToken);
+
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        ReconciliationRun? run = await unitOfWork.ReconciliationRuns.GetLatestAsync(CancellationToken);
+        Assert.NotNull(run);
+        Assert.True(run.Succeeded);
+
+        Assert.NotNull(context.ReconciliationStatus.LastSucceededAt);
+        Assert.Equal(0, context.ReconciliationStatus.LastErrorCount);
     }
 }

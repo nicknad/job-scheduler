@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
 using Quartz.Impl.AdoJobStore;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Reconciliation;
 
 namespace Scheduler.Infrastructure.Scheduling;
@@ -26,12 +27,16 @@ public static class SchedulerSchedulingRegistration
 
         services.AddSingleton(options);
         services.AddSingleton<IScheduleStore, QuartzScheduleStore>();
-        services.AddSingleton<IReconciler, ScheduleReconciler>();
+        services.AddSingleton<ScheduleReconciler>();
+        services.AddSingleton<IReconciler>(provider => provider.GetRequiredService<ScheduleReconciler>());
+        services.AddSingleton<IReconciliationStatus>(provider => provider.GetRequiredService<ScheduleReconciler>());
 
         services.AddQuartz(builder =>
         {
             builder.ConfigureScheduler(scheduler => scheduler.InstanceName = options.SchedulerName);
             builder.UseDefaultThreadPool(options.ThreadPoolSize);
+            builder.AddTriggerListener<ScheduleEventListener>(
+                [GroupMatcher<TriggerKey>.GroupEquals(options.JobGroup)]);
 
             if (options.UsePersistentStore)
             {

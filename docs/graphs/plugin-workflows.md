@@ -64,19 +64,22 @@ flowchart TD
   REC --> QZ[("Quartz ADO.NET store")]
 ```
 
-## Execute (Phase 3–4 — implemented)
+## Execute (Phase 3–5 — implemented)
 
 Manual runs enter through `IJobManager.RunNowAsync`; scheduled runs enter from
 Quartz's bridge job. The dispatcher resolves the active version, pins it with
 the configuration revision, admits the execution under the concurrency gates,
-and runs it to a terminal state. Retries loop inside the runner against the
+and runs it to a terminal state. A refused dispatch is recorded as a rejection,
+and a manual run is audited. Retries loop inside the runner against the
 already-pinned handler. Worker execution is phase 8.
 
 ```mermaid
 flowchart TD
   RUN["IJobManager.RunNowAsync(jobId)<br/>(manual run)"] --> DISP["Dispatcher.DispatchAsync(jobId)"]
+  RUN -- "audit job.run" --> AUD[("audit log")]
   QZ[("Quartz fires trigger")] --> BRIDGE["QuartzBridgeJob:<br/>read jobId from job data"]
   BRIDGE --> DISP
+  DISP -- "not admitted: reason" --> REJ[("execution_rejections")]
   DISP --> RES["resolve active version from plugin_activation"]
   RES --> PIN["pin plugin version + configRevision<br/>+ resolve handler"]
   PIN --> CONC{"ConcurrencyGate:<br/>global limit (default 8),<br/>per-job no-overlap default"}
@@ -86,7 +89,7 @@ flowchart TD
   MODE -. "worker (phase 8)" .-> WK["Runtime.Worker:<br/>authenticated local IPC"]
   IP --> H["IJobHandler.ExecuteAsync<br/>(timeout + cancellation token)"]
   WK -.-> H
-  H --> EXEC[("execution store:<br/>Pending → Running → terminal")]
+  H --> EXEC[("execution store:<br/>Pending → Running → terminal<br/>+ correlation id")]
   EXEC --> RET{"failed &amp; retryable?<br/>RetryPolicyEvaluator"}
   RET -- "yes, attempts left" --> BACKOFF["backoff delay"]
   BACKOFF --> H
@@ -128,6 +131,45 @@ flowchart TD
   REC --> AUD[("audit log: results + failures")]
 ```
 
+## Observe & operate (Phase 5 — implemented)
+
+The operator surface is CLI-first: `Scheduler.Cli` is a thin HTTP client of the management API and
+re-implements no logic. Every number is a durable SQL aggregate, so the done/not-done picture
+survives restarts. Rejections, schedule fires/misses, and reconciliation runs are recorded durably
+at the point they happen.
+
+```mermaid
+flowchart TD
+  OP(["Operator"]) --> CLI["Scheduler.Cli<br/>(thin HTTP client)"]
+  CLI --> API["Management API (Host)"]
+
+  API --> SUM["GET /api/executions/summary"]
+  API --> HIST["GET /api/executions, /api/jobs/{id}/executions, /api/executions/{id}"]
+  API --> LOGS["GET /api/executions/{id}/logs"]
+  API --> AUD["GET /api/audit"]
+  API --> HEALTH["GET /api/health  (DB, reconciler, stuck)"]
+
+  SUM --> DB[("SQLite aggregates")]
+  HIST --> DB
+  AUD --> DB
+  HEALTH --> DB
+  HEALTH --> RSTAT["IReconciliationStatus"]
+
+  LOGS --> LOGFILES[("LogsRoot/{executionId}.log<br/>JSONL per execution")]
+
+  DISP["Dispatcher"] -- "not admitted + reason" --> REJ[("execution_rejections")]
+  QZ["Quartz trigger listener"] -- "fired / missed / skipped" --> SEV[("schedule_events")]
+  RECON["ScheduleReconciler"] -- "each sweep" --> RUNS[("reconciliation_runs")]
+  HOST["Host startup"] -- "Running → Interrupted" --> DB
+
+  DB --> SUM
+  REJ --> SUM
+  SEV --> SUM
+  RUNS --> SUM
+  EXEC["InProcessExecutionBackend"] -- "execution-scoped logger factory" --> LOGFILES
+  HOSTLOG["Host logging: JSON console + rolling file"] --> LOGROOT[("LogsRoot/host-{date}.log")]
+```
+
 ## Modules & layering
 
 ```mermaid
@@ -144,6 +186,9 @@ flowchart LR
     RECON["ScheduleReconciler (Application)"] --> REG
     RECON --> STORE["IScheduleStore"]
     STORE["QuartzScheduleStore (Infrastructure)"] --> QZ[("Quartz store")]
+    API --> OBS["Observability: summary / history / logs / audit / health"]
+    OBS --> REG
+    OBS --> LOGS[("LogsRoot files")]
   end
   subgraph Exe["Execution plane (in-process implemented)"]
     QZ --> BRIDGE["QuartzBridgeJob"]
@@ -169,5 +214,5 @@ Quartz types stay inside `Scheduler.Infrastructure` (and the Host composition ro
 reaches Quartz only through the application-owned `IScheduleStore` port, so `Scheduler.Application`
 and `Scheduler.Contracts` remain Quartz-free.
 
-Planned in later phases: the management API/CLI lifecycle surface (phase 5),
-secrets/observability (phase 6), and the worker backend (phase 8).
+Planned in later phases: authenticated management-API surface and secret authorization (phase 6),
+and the worker backend (phase 8).

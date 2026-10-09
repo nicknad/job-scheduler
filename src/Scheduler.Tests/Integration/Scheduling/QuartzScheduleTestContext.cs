@@ -5,11 +5,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Quartz;
 using Scheduler.Application.Execution;
 using Scheduler.Application.JobManagement;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
 using Scheduler.Application.Reconciliation;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
+using Scheduler.Infrastructure.Observability;
 using Scheduler.Infrastructure.Persistence;
 using Scheduler.Infrastructure.Scheduling;
 using Scheduler.Tests.Support;
@@ -34,6 +36,7 @@ internal sealed class QuartzScheduleTestContext : IAsyncDisposable
         ScheduleOptions options,
         IScheduler scheduler,
         IReconciler reconciler,
+        IReconciliationStatus reconciliationStatus,
         IScheduleStore scheduleStore,
         IJobManager jobs,
         RecordingDispatcher dispatcher)
@@ -44,6 +47,7 @@ internal sealed class QuartzScheduleTestContext : IAsyncDisposable
         Options = options;
         Scheduler = scheduler;
         Reconciler = reconciler;
+        ReconciliationStatus = reconciliationStatus;
         ScheduleStore = scheduleStore;
         Jobs = jobs;
         Dispatcher = dispatcher;
@@ -56,6 +60,8 @@ internal sealed class QuartzScheduleTestContext : IAsyncDisposable
     public IScheduler Scheduler { get; }
 
     public IReconciler Reconciler { get; }
+
+    public IReconciliationStatus ReconciliationStatus { get; }
 
     public IScheduleStore ScheduleStore { get; }
 
@@ -95,6 +101,7 @@ internal sealed class QuartzScheduleTestContext : IAsyncDisposable
         services.AddSingleton<IDispatcher>(dispatcher);
         services.AddSingleton<IJobManager, JobManager>();
         services.AddSchedulerScheduling(database.ConnectionFactory.DatabasePath, effectiveOptions);
+        services.AddSchedulerObservability(new ObservabilityOptions());
 
         ServiceProvider provider = services.BuildServiceProvider();
         ISchedulerFactory factory = provider.GetRequiredService<ISchedulerFactory>();
@@ -108,6 +115,7 @@ internal sealed class QuartzScheduleTestContext : IAsyncDisposable
             effectiveOptions,
             scheduler,
             provider.GetRequiredService<IReconciler>(),
+            provider.GetRequiredService<IReconciliationStatus>(),
             provider.GetRequiredService<IScheduleStore>(),
             provider.GetRequiredService<IJobManager>(),
             dispatcher);

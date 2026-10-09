@@ -51,3 +51,15 @@ supersede with a link. Current ADRs:
   plugin version less than or equal to the host's ([02-plugin-package.md](02-plugin-package.md)).
   Consequence: signer and verifier share one byte-exact definition; digest and archive encoding are
   decoupled; no silent major-version acceptance.
+- **ADR-007 Observability is durable work-done/not-done SQL, surfaced CLI-first.** Context: an
+  operator must see what work was done or not (and why) without reading source or tailing logs, and
+  the numbers must survive restarts. Decision: the observability surface reports **only** signals
+  that mean work happened or did not happen, computed as aggregate queries over SQLite
+  (`executions`, `execution_rejections`, `schedule_events`, `reconciliation_runs`, `operations`);
+  the only exposed metrics endpoint is the JSON summary; per-execution plugin logs
+  are persisted as JSONL files keyed by execution id; `Scheduler.Cli` is the primary surface and a
+  thin HTTP client. Consequence: no Prometheus/OpenTelemetry scrape endpoint and no
+  `System.Diagnostics.Metrics` counters until scraping is deliberately added; infrastructure
+  telemetry (CPU/memory/GC/latency/pools) is out of scope; done/not-done numbers are durable across
+  restarts by construction.
+

@@ -1,45 +1,33 @@
-return args switch
+using Scheduler.Cli;
+
+string[] commandArgs = StripApiArgument(args, out string baseUrl);
+using HttpClient http = new()
 {
-    ["help"] or ["--help"] or ["-?"] => Usage(exitCode: 0),
-    ["plugin", "list"] => ListPlugins(),
-    ["plugin", "install", string path] => NotImplemented($"plugin install {path}"),
-    ["plugin", "validate", string id, string version] => NotImplemented($"plugin validate {id} {version}"),
-    ["plugin", "activate", string id, string version] => NotImplemented($"plugin activate {id} {version}"),
-    ["plugin", "deactivate", string id] => NotImplemented($"plugin deactivate {id}"),
-    ["plugin", "rollback", string id, string version] => NotImplemented($"plugin rollback {id} {version}"),
-    ["plugin", "remove", string id] => NotImplemented($"plugin remove {id}"),
-    ["job", "list"] => NotImplemented("job list"),
-    ["job", "run", string id] => NotImplemented($"job run {id}"),
-    _ => Usage(exitCode: 1),
+    BaseAddress = new Uri(baseUrl, UriKind.Absolute),
+    Timeout = TimeSpan.FromSeconds(30),
 };
 
-static int ListPlugins()
-{
-    Console.WriteLine("No plugins installed (management API wiring pending).");
-    return 0;
-}
+return await SchedulerCli.RunAsync(
+    commandArgs,
+    new HttpSchedulerApiClient(http),
+    Console.Out,
+    Console.Error,
+    CancellationToken.None);
 
-static int NotImplemented(string command)
+static string[] StripApiArgument(string[] args, out string baseUrl)
 {
-    Console.Error.WriteLine($"'{command}' is not implemented yet; it will call the management API.");
-    return 2;
-}
+    baseUrl = Environment.GetEnvironmentVariable("SCHEDULER_API_URL") ?? "http://localhost:5000";
+    List<string> remaining = [];
+    for (int index = 0; index < args.Length; index++)
+    {
+        if (args[index] == "--api" && index + 1 < args.Length)
+        {
+            baseUrl = args[++index];
+            continue;
+        }
 
-static int Usage(int exitCode)
-{
-    Console.WriteLine("""
-        Usage: scheduler <command> [arguments]
+        remaining.Add(args[index]);
+    }
 
-        Commands:
-          plugin install <package-path>
-          plugin validate <id> <version>
-          plugin activate <id> <version>
-          plugin deactivate <id>
-          plugin rollback <id> <version>
-          plugin remove <id>
-          plugin list
-          job list
-          job run <id>
-        """);
-    return exitCode;
+    return [.. remaining];
 }

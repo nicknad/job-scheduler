@@ -26,6 +26,15 @@ public static class SchemaMigrations
             Sql: """
                 ALTER TABLE plugin_versions ADD COLUMN unclean_unload_reason TEXT;
                 """),
+        new Migration(
+            Version: 4,
+            Name: "observability",
+            Sql: string.Join(
+                Environment.NewLine,
+                "ALTER TABLE executions ADD COLUMN correlation_id TEXT;",
+                SchemaDefinitions.ExecutionRejections,
+                SchemaDefinitions.ScheduleEvents,
+                SchemaDefinitions.ReconciliationRuns)),
     ];
 
     public static int LatestVersion => All[^1].Version;

@@ -1,3 +1,5 @@
+using Scheduler.Application.Observability;
+
 namespace Scheduler.Application.Persistence;
 
 /// <summary>
@@ -16,6 +18,12 @@ public interface IRegistryUnitOfWork : IAsyncDisposable
     IOperationRepository Operations { get; }
 
     IAuditLogRepository Audit { get; }
+
+    IExecutionRejectionRepository Rejections { get; }
+
+    IScheduleEventRepository ScheduleEvents { get; }
+
+    IReconciliationRunRepository ReconciliationRuns { get; }
 
     Task CommitAsync(CancellationToken cancellationToken = default);
 

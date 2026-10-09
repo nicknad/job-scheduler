@@ -1,4 +1,5 @@
 using Scheduler.Application.Execution;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
@@ -260,6 +261,12 @@ public sealed class DispatcherTests
 
         await Assert.ThrowsAsync<KeyNotFoundException>(
             () => context.Dispatcher.DispatchAsync("missing-job", CancellationToken));
+
+        ExecutionRejection rejection = await RequireSingleRejectionAsync(context);
+        Assert.Equal("missing-job", rejection.JobId);
+        Assert.Equal(ExecutionRejectionReason.NotFound, rejection.Reason);
+        Assert.Null(rejection.PluginId);
+        Assert.False(string.IsNullOrWhiteSpace(rejection.CorrelationId));
     }
 
     [Fact]
@@ -276,8 +283,13 @@ public sealed class DispatcherTests
             Definition() with { Enabled = false },
             CancellationToken);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        DispatchRejectedException exception = await Assert.ThrowsAsync<DispatchRejectedException>(
             () => context.Dispatcher.DispatchAsync("test-job", CancellationToken));
+        Assert.Equal(ExecutionRejectionReason.Disabled, exception.Reason);
+
+        ExecutionRejection rejection = await RequireSingleRejectionAsync(context);
+        Assert.Equal("test-job", rejection.JobId);
+        Assert.Equal(ExecutionRejectionReason.Disabled, rejection.Reason);
     }
 
     [Fact]
@@ -290,8 +302,12 @@ public sealed class DispatcherTests
         await context.InitializeAsync(CancellationToken);
         await context.Jobs.UpdateAsync(Definition(), CancellationToken);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        DispatchRejectedException exception = await Assert.ThrowsAsync<DispatchRejectedException>(
             () => context.Dispatcher.DispatchAsync("test-job", CancellationToken));
+        Assert.Equal(ExecutionRejectionReason.NoActiveVersion, exception.Reason);
+
+        ExecutionRejection rejection = await RequireSingleRejectionAsync(context);
+        Assert.Equal(ExecutionRejectionReason.NoActiveVersion, rejection.Reason);
     }
 
     [Fact]
@@ -308,8 +324,22 @@ public sealed class DispatcherTests
             Definition() with { ExecutionMode = ExecutionMode.Worker },
             CancellationToken);
 
-        await Assert.ThrowsAsync<NotSupportedException>(
+        DispatchRejectedException exception = await Assert.ThrowsAsync<DispatchRejectedException>(
             () => context.Dispatcher.DispatchAsync("test-job", CancellationToken));
+        Assert.Equal(ExecutionRejectionReason.ModeUnavailable, exception.Reason);
+
+        ExecutionRejection rejection = await RequireSingleRejectionAsync(context);
+        Assert.Equal(ExecutionRejectionReason.ModeUnavailable, rejection.Reason);
+    }
+
+    private static async Task<ExecutionRejection> RequireSingleRejectionAsync(RuntimeTestContext context)
+    {
+        await using IRegistryUnitOfWork unitOfWork = await context.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        IReadOnlyList<ExecutionRejection> rejections = await unitOfWork.Rejections.ListAsync(
+            since: null,
+            limit: 10,
+            CancellationToken);
+        return Assert.Single(rejections);
     }
 
     private static async Task<IRunningExecution> WaitForRunningAsync(RuntimeTestContext context)

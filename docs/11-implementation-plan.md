@@ -80,24 +80,41 @@ sweep interrupted at any point converges on the next sweep. Quartz hosting is co
 types stay in `Scheduler.Infrastructure` and the host composition root, and the reconciler reaches
 Quartz only through `IScheduleStore`.
 
-## Phase 5 — Management API, CLI, and audit
+## Phase 5 — Observability and operations (done)
 
-**Goal:** the API is the lifecycle.
-Deliverables: authenticated management API (loopback default, separate permissions per action),
-operation-scoped idempotency (repeated requests return the same operation result), long-operation
-progress endpoints, CLI commands calling the API, full audit coverage (install, activate,
-deactivate, rollback, remove, manual run, secret-access decisions).
-Tests: API-driven full lifecycle; replay/duplicate protection; audit assertions (acceptance #10).
-Exit gate: acceptance #1, #4, #5, #6, #10 green (4 and 5 via dispatcher drain policies with a
-quiescing execution in flight).
+**Goal:** the operator can answer what work was done, what was not and why, and what is written
+down — from the CLI, without reading source or tailing raw logs.
+Deliverables: durable done/not-done SQL aggregates over the registry tables (no in-process meters);
+JSON summary endpoint `GET /api/executions/summary` (the centerpiece; no Prometheus/OTel scrape
+endpoint); execution history, filterable audit read, per-execution log capture and retrieval, and
+health detail endpoints; a finished CLI-first operator surface (`Scheduler.Cli`) as a thin HTTP
+client; execution-scoped logger/reporter factory; durable rejection reasons; correlation id on every
+execution; startup `Interrupted` classification. See
+[09-observability-operations.md](09-observability-operations.md).
+Tests: summary aggregates (acceptance #11); log capture and retrieval (acceptance #12); recovery
+classification (acceptance #13); health detail (acceptance #14); extended audit coverage (#10).
+Exit gate: acceptance #10–#14 green.
+Per-step gate — each step ships independently and idempotently:
+1. Spec docs updated (gates green).
+2. Persistence: `correlation_id`, rejection records, startup `Interrupted` classification, and the
+   per-execution log store (migration + repositories + tests) — all forward-only and idempotent.
+3. Execution-scoped logger/reporter factory replacing the process-wide null singletons.
+4. API endpoints (list / history / summary / show / logs / audit / health) with tests.
+5. CLI commands (thin client) with tests.
+6. Host structured logging scopes + rolling file capture under `LogsRoot`.
+7. Docs finalized; this phase marked done.
+The summary aggregates are idempotent reads; `Interrupted` classification runs once per startup and
+is idempotent (only `Running` rows transition); log retention only trims files beyond the configured
+count.
 
 ## Phase 6 — Secrets and release hardening
 
-**Goal:** least-privilege secrets, resilient shutdown, complete observability.
+**Goal:** least-privilege secrets, authenticated release surface, resilient shutdown.
 Deliverables: DPAPI/OS-backed secret store + policy registry; restricted per-execution
-`ISecretProvider`; rotation semantics (latest-at-dispatch, retain-until-complete); graceful
-shutdown with drain timeout; heartbeat monitoring for stuck executions; metrics + health
-endpoints; consistent backup tooling.
+`ISecretProvider`; rotation semantics (latest-at-dispatch, retain-until-complete); management-API
+authentication (loopback default, separate permissions per action) and operation-scoped idempotency;
+graceful shutdown with drain timeout and heartbeat-based stuck-execution monitoring; consistent
+backup tooling.
 Tests: secret authorization negative/positive (acceptance #8); rotation during idle + running
 executions; crash/drain/shutdown fault-injection sweeps.
 Exit gate: full acceptance checklist (#1–#8, #10) green.

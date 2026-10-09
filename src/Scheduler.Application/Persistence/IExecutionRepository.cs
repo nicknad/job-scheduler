@@ -1,3 +1,4 @@
+using Scheduler.Application.Observability;
 using Scheduler.Contracts.Execution;
 
 namespace Scheduler.Application.Persistence;
@@ -11,8 +12,19 @@ public interface IExecutionRepository
 
     Task<IReadOnlyList<ExecutionRecord>> ListByStatusAsync(JobExecutionStatus status, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists executions matching <paramref name="filter" />, newest first.</summary>
+    Task<IReadOnlyList<ExecutionRecord>> ListAsync(ExecutionFilter filter, CancellationToken cancellationToken = default);
+
     Task CreateAsync(ExecutionRecord execution, CancellationToken cancellationToken = default);
 
     /// <summary>Replaces the mutable execution fields (status, timestamps, result).</summary>
     Task UpdateAsync(ExecutionRecord execution, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Transitions every execution still <see cref="JobExecutionStatus.Running" />
+    /// to <see cref="JobExecutionStatus.Interrupted" /> at startup, stamping
+    /// <paramref name="interruptedAt" /> as the end time. Idempotent. Returns the
+    /// number of rows classified.
+    /// </summary>
+    Task<int> MarkRunningAsInterruptedAsync(DateTimeOffset interruptedAt, CancellationToken cancellationToken = default);
 }

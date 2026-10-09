@@ -2,13 +2,16 @@ using System.IO.Abstractions;
 using Microsoft.AspNetCore.Http.Features;
 using Scheduler.Application.Execution;
 using Scheduler.Application.JobManagement;
+using Scheduler.Application.Observability;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
+using Scheduler.Application.Reconciliation;
 using Scheduler.Contracts;
 using Scheduler.Contracts.Execution;
 using Scheduler.Contracts.Jobs;
 using Scheduler.Contracts.Secrets;
+using Scheduler.Infrastructure.Observability;
 using Scheduler.Infrastructure.Packaging;
 using Scheduler.Infrastructure.Persistence;
 using Scheduler.Infrastructure.Scheduling;
@@ -19,6 +22,14 @@ using Scheduler.Host;
 const long MultipartBodyLengthLimit = 512L * 1024 * 1024;
 
 var builder = WebApplication.CreateBuilder(args);
+
+IFileSystem fileSystem = new FileSystem();
+
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options => options.IncludeScopes = true);
+builder.Logging.AddProvider(new SimpleFileLoggerProvider(
+    ResolveLogsRoot(packagingLogsRoot: builder.Configuration["JobScheduler:LogsRoot"] ?? "logs", builder.Environment.ContentRootPath),
+    fileSystem));
 
 builder.Services.AddHealthChecks();
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = MultipartBodyLengthLimit);
@@ -46,8 +57,11 @@ ScheduleOptions scheduleOptions = new()
     SchedulerName = builder.Configuration["JobScheduler:SchedulerName"] ?? "scheduler",
     UsePersistentStore = builder.Configuration.GetValue("JobScheduler:UsePersistentStore", true),
 };
+ObservabilityOptions observabilityOptions = new()
+{
+    RetainedLogs = builder.Configuration.GetValue("JobScheduler:RetainedLogs", 500),
+};
 
-IFileSystem fileSystem = new FileSystem();
 SqliteConnectionFactory connectionFactory = new(persistenceOptions, fileSystem);
 
 builder.Services.AddSingleton(TimeProvider.System);
@@ -73,8 +87,6 @@ builder.Services.AddSingleton<IPluginRuntime, InProcessPluginRuntime>();
 builder.Services.AddSingleton<IRunningExecutionRegistry, RunningExecutionRegistry>();
 builder.Services.AddSingleton<ConcurrencyGate>();
 builder.Services.AddSingleton<RetryPolicyEvaluator>();
-builder.Services.AddSingleton<IJobExecutionLogger, NullJobExecutionLogger>();
-builder.Services.AddSingleton<IJobProgressReporter, NullJobProgressReporter>();
 builder.Services.AddSingleton<ISecretProvider, DeniedSecretProvider>();
 builder.Services.AddSingleton<IExecutionBackend, InProcessExecutionBackend>();
 builder.Services.AddSingleton<ExecutionRunner>();
@@ -83,6 +95,7 @@ builder.Services.AddSingleton<IJobManager, JobManager>();
 builder.Services.AddSingleton<IPluginManager, PluginManager>();
 
 builder.Services.AddSchedulerScheduling(connectionFactory.DatabasePath, scheduleOptions);
+builder.Services.AddSchedulerObservability(observabilityOptions);
 
 var app = builder.Build();
 
@@ -95,6 +108,27 @@ await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
 
     IArtifactStore artifactStore = scope.ServiceProvider.GetRequiredService<IArtifactStore>();
     await artifactStore.ClearStagingAsync();
+
+    IRegistryUnitOfWorkFactory unitOfWorkFactory = scope.ServiceProvider.GetRequiredService<IRegistryUnitOfWorkFactory>();
+    DateTimeOffset startupNow = TimeProvider.System.GetUtcNow();
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync();
+    int interrupted = await unitOfWork.Executions.MarkRunningAsInterruptedAsync(startupNow);
+    if (interrupted > 0)
+    {
+        await unitOfWork.Audit.WriteAsync(new AuditEntry
+        {
+            Timestamp = startupNow,
+            Actor = "host",
+            Action = "execution.recovered",
+            Target = "executions",
+            Details = $"interrupted={interrupted}",
+        });
+    }
+
+    await unitOfWork.CommitAsync();
+
+    IExecutionLogStore logStore = scope.ServiceProvider.GetRequiredService<IExecutionLogStore>();
+    await logStore.TrimAsync(observabilityOptions.RetainedLogs);
 }
 
 app.MapHealthChecks("/healthz");
@@ -234,14 +268,82 @@ app.MapPost("/api/jobs/{id}/run", async (
         Guid executionId = await jobs.RunNowAsync(id, cancellationToken);
         return Results.Ok(new { executionId });
     }
+    catch (DispatchRejectedException exception)
+    {
+        return Results.Json(
+            new { error = exception.Message, reason = exception.Reason.ToString() },
+            statusCode: StatusCodes.Status409Conflict);
+    }
     catch (KeyNotFoundException exception)
     {
-        return Results.NotFound(new { error = exception.Message });
+        return Results.NotFound(new { error = exception.Message, reason = nameof(ExecutionRejectionReason.NotFound) });
     }
     catch (InvalidOperationException exception)
     {
         return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status409Conflict);
     }
+});
+
+app.MapGet("/api/executions", async (
+    string? jobId,
+    string? status,
+    DateTimeOffset? since,
+    DateTimeOffset? until,
+    int? limit,
+    IRegistryUnitOfWorkFactory unitOfWorkFactory,
+    ObservabilityOptions observability,
+    CancellationToken cancellationToken) =>
+{
+    JobExecutionStatus? parsedStatus = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        if (!Enum.TryParse(status, ignoreCase: true, out JobExecutionStatus value) || !Enum.IsDefined(value))
+        {
+            return Results.BadRequest(new { error = $"'{status}' is not a valid execution status." });
+        }
+
+        parsedStatus = value;
+    }
+
+    ExecutionFilter filter = new()
+    {
+        JobId = jobId,
+        Status = parsedStatus,
+        Since = since,
+        Until = until,
+        Limit = Math.Clamp(limit ?? observability.ExecutionListLimit, 1, observability.ExecutionListLimit),
+    };
+
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync(cancellationToken);
+    return Results.Ok(await unitOfWork.Executions.ListAsync(filter, cancellationToken));
+});
+
+app.MapGet("/api/jobs/{id}/executions", async (
+    string id,
+    IRegistryUnitOfWorkFactory unitOfWorkFactory,
+    CancellationToken cancellationToken) =>
+{
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync(cancellationToken);
+    return Results.Ok(await unitOfWork.Executions.ListByJobAsync(id, cancellationToken));
+});
+
+app.MapGet("/api/executions/summary", async (
+    string? window,
+    IExecutionSummaryService summary,
+    CancellationToken cancellationToken) =>
+{
+    TimeSpan? parsedWindow = null;
+    if (!string.IsNullOrWhiteSpace(window))
+    {
+        if (!DurationParser.TryParse(window, out TimeSpan value))
+        {
+            return Results.BadRequest(new { error = $"'{window}' is not a valid window (e.g. 90s, 30m, 24h, 7d)." });
+        }
+
+        parsedWindow = value;
+    }
+
+    return Results.Ok(await summary.GetSummaryAsync(parsedWindow, cancellationToken));
 });
 
 app.MapGet("/api/executions/{id:guid}", async (
@@ -254,6 +356,22 @@ app.MapGet("/api/executions/{id:guid}", async (
     return execution is null ? Results.NotFound(new { id }) : Results.Ok(execution);
 });
 
+app.MapGet("/api/executions/{id:guid}/logs", async (
+    Guid id,
+    IExecutionLogStore logs,
+    IRegistryUnitOfWorkFactory unitOfWorkFactory,
+    CancellationToken cancellationToken) =>
+{
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync(cancellationToken);
+    ExecutionRecord? execution = await unitOfWork.Executions.GetAsync(id, cancellationToken);
+    if (execution is null)
+    {
+        return Results.NotFound(new { id });
+    }
+
+    return Results.Ok(await logs.ReadAsync(id, cancellationToken));
+});
+
 app.MapPost("/api/executions/{id:guid}/cancel", async (
     Guid id,
     IDispatcher dispatcher,
@@ -263,7 +381,36 @@ app.MapPost("/api/executions/{id:guid}/cancel", async (
     return cancelled ? Results.Ok(new { executionId = id, status = "cancelling" }) : Results.NotFound(new { id });
 });
 
-app.MapGet("/api/audit", () => Results.Ok(Array.Empty<object>()));
+app.MapGet("/api/audit", async (
+    string? actor,
+    string? action,
+    string? target,
+    DateTimeOffset? since,
+    int? limit,
+    IRegistryUnitOfWorkFactory unitOfWorkFactory,
+    ObservabilityOptions observability,
+    CancellationToken cancellationToken) =>
+{
+    AuditFilter filter = new()
+    {
+        Actor = actor,
+        Action = action,
+        Target = target,
+        Since = since,
+        Limit = Math.Clamp(limit ?? 100, 1, observability.ExecutionListLimit),
+    };
+
+    await using IRegistryUnitOfWork unitOfWork = await unitOfWorkFactory.BeginAsync(cancellationToken);
+    return Results.Ok(await unitOfWork.Audit.ListAsync(filter, cancellationToken));
+});
+
+app.MapGet("/api/health", async (IHealthReportService health, CancellationToken cancellationToken) =>
+{
+    HealthReport report = await health.GetHealthAsync(cancellationToken);
+    return report.Healthy
+        ? Results.Ok(report)
+        : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
+});
 
 app.Run();
 
@@ -271,5 +418,10 @@ static IResult LifecycleResult(PluginOperation operation) =>
     operation.Status == PluginOperationStatus.Succeeded
         ? Results.Ok(operation)
         : Results.Json(operation, statusCode: StatusCodes.Status422UnprocessableEntity);
+
+static string ResolveLogsRoot(string packagingLogsRoot, string contentRoot) =>
+    Path.IsPathRooted(packagingLogsRoot)
+        ? packagingLogsRoot
+        : Path.GetFullPath(Path.Combine(contentRoot, packagingLogsRoot));
 
 public partial class Program;

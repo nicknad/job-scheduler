@@ -1,3 +1,4 @@
+using Scheduler.Application.Observability;
 using Scheduler.Application.Persistence;
 using Scheduler.Application.PluginManagement;
 using Scheduler.Contracts.Plugins;
@@ -8,7 +9,8 @@ namespace Scheduler.Application.Execution;
 /// Resolves the active plugin version for a job, admits the execution under the
 /// concurrency policy, and runs it through the configured backend. Existing
 /// executions keep their pinned version and revision; only new dispatches follow
-/// a version change.
+/// a version change. A dispatch that is not admitted is recorded durably with a
+/// structured reason before the failure is raised.
 /// </summary>
 public sealed class Dispatcher : IDispatcher
 {
@@ -18,6 +20,7 @@ public sealed class Dispatcher : IDispatcher
     private readonly ExecutionRunner _runner;
     private readonly ConcurrencyGate _gate;
     private readonly IRunningExecutionRegistry _running;
+    private readonly IExecutionRejectionWriter _rejections;
     private readonly TimeProvider _timeProvider;
 
     public Dispatcher(
@@ -27,6 +30,7 @@ public sealed class Dispatcher : IDispatcher
         ExecutionRunner runner,
         ConcurrencyGate gate,
         IRunningExecutionRegistry running,
+        IExecutionRejectionWriter rejections,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(unitOfWorkFactory);
@@ -35,6 +39,7 @@ public sealed class Dispatcher : IDispatcher
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(running);
+        ArgumentNullException.ThrowIfNull(rejections);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _unitOfWorkFactory = unitOfWorkFactory;
@@ -43,6 +48,7 @@ public sealed class Dispatcher : IDispatcher
         _runner = runner;
         _gate = gate;
         _running = running;
+        _rejections = rejections;
         _timeProvider = timeProvider;
     }
 
@@ -50,52 +56,114 @@ public sealed class Dispatcher : IDispatcher
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        JobRecord job = await GetJobAsync(jobId, cancellationToken)
-            ?? throw new KeyNotFoundException($"Job '{jobId}' was not found.");
+        JobRecord? job = await GetJobAsync(jobId, cancellationToken);
+        if (job is null)
+        {
+            await _rejections.RecordAsync(
+                jobId,
+                pluginId: null,
+                ExecutionRejectionReason.NotFound,
+                $"Job '{jobId}' was not found.",
+                cancellationToken);
+            throw new KeyNotFoundException($"Job '{jobId}' was not found.");
+        }
 
         if (!job.Definition.Enabled)
         {
-            throw new InvalidOperationException($"Job '{jobId}' is disabled.");
+            await _rejections.RecordAsync(
+                jobId,
+                job.Definition.PluginId,
+                ExecutionRejectionReason.Disabled,
+                $"Job '{jobId}' is disabled.",
+                cancellationToken);
+            throw new DispatchRejectedException(
+                ExecutionRejectionReason.Disabled,
+                $"Job '{jobId}' is disabled.");
         }
 
         if (job.Definition.ExecutionMode != _backend.Mode)
         {
-            throw new NotSupportedException(
+            await _rejections.RecordAsync(
+                jobId,
+                job.Definition.PluginId,
+                ExecutionRejectionReason.ModeUnavailable,
+                $"Execution mode '{job.Definition.ExecutionMode}' is not available on this host.",
+                cancellationToken);
+            throw new DispatchRejectedException(
+                ExecutionRejectionReason.ModeUnavailable,
                 $"Execution mode '{job.Definition.ExecutionMode}' is not available on this host.");
         }
 
-        Version activeVersion = await ResolveActiveVersionAsync(job.Definition.PluginId, cancellationToken)
-            ?? throw new InvalidOperationException(
+        Version? activeVersion = await ResolveActiveVersionAsync(job.Definition.PluginId, cancellationToken);
+        if (activeVersion is null)
+        {
+            await _rejections.RecordAsync(
+                jobId,
+                job.Definition.PluginId,
+                ExecutionRejectionReason.NoActiveVersion,
+                $"Plugin '{job.Definition.PluginId}' has no active version.",
+                cancellationToken);
+            throw new DispatchRejectedException(
+                ExecutionRejectionReason.NoActiveVersion,
                 $"Plugin '{job.Definition.PluginId}' has no active version; activate it before running jobs.");
+        }
 
-        IJobHandler handler = _pluginRuntime.ResolveHandler(jobId, job.Definition.PluginId, activeVersion)
-            ?? throw new InvalidOperationException(
+        IJobHandler? handler = _pluginRuntime.ResolveHandler(jobId, job.Definition.PluginId, activeVersion);
+        if (handler is null)
+        {
+            await _rejections.RecordAsync(
+                jobId,
+                job.Definition.PluginId,
+                ExecutionRejectionReason.NoHandler,
+                $"No handler for job '{jobId}' in active plugin '{job.Definition.PluginId}' '{activeVersion}'.",
+                cancellationToken);
+            throw new DispatchRejectedException(
+                ExecutionRejectionReason.NoHandler,
                 $"No handler for job '{jobId}' in active plugin '{job.Definition.PluginId}' '{activeVersion}'.");
+        }
 
         Guid executionId = Guid.NewGuid();
+        string correlationId = executionId.ToString("N");
         using IRunningExecution running = _running.Register(
             executionId,
             job.Definition.PluginId,
             activeVersion,
             CancellationToken.None);
-        using IDisposable slot = await _gate.AcquireAsync(
-            jobId,
-            job.Definition.ConcurrencyPolicy,
-            cancellationToken);
 
-        ExecutionRequest request = new(
-            jobId,
-            job.Definition.PluginId,
-            activeVersion,
-            job.ConfigurationRevision,
-            executionId,
-            _timeProvider.GetUtcNow(),
-            job.Definition.Parameters,
-            job.Definition.Timeout,
-            job.Definition.RetryPolicy,
-            handler);
+        IDisposable slot;
+        try
+        {
+            slot = await _gate.AcquireAsync(jobId, job.Definition.ConcurrencyPolicy, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            await _rejections.RecordAsync(
+                jobId,
+                job.Definition.PluginId,
+                ExecutionRejectionReason.Concurrency,
+                "Admission was abandoned while waiting for a concurrency slot.",
+                CancellationToken.None);
+            throw;
+        }
 
-        await _runner.RunAsync(request, running);
+        using (slot)
+        {
+            ExecutionRequest request = new(
+                jobId,
+                job.Definition.PluginId,
+                activeVersion,
+                job.ConfigurationRevision,
+                executionId,
+                correlationId,
+                _timeProvider.GetUtcNow(),
+                job.Definition.Parameters,
+                job.Definition.Timeout,
+                job.Definition.RetryPolicy,
+                handler);
+
+            await _runner.RunAsync(request, running);
+        }
+
         return executionId;
     }
 

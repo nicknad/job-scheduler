@@ -13,21 +13,27 @@ namespace Scheduler.Application.JobManagement;
 /// </summary>
 public sealed class JobManager : IJobManager
 {
+    private const string Actor = "local";
+
     private readonly IRegistryUnitOfWorkFactory _unitOfWorkFactory;
     private readonly IDispatcher _dispatcher;
+    private readonly IAuditWriter _auditWriter;
     private readonly TimeProvider _timeProvider;
 
     public JobManager(
         IRegistryUnitOfWorkFactory unitOfWorkFactory,
         IDispatcher dispatcher,
+        IAuditWriter auditWriter,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(unitOfWorkFactory);
         ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(auditWriter);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _unitOfWorkFactory = unitOfWorkFactory;
         _dispatcher = dispatcher;
+        _auditWriter = auditWriter;
         _timeProvider = timeProvider;
     }
 
@@ -102,10 +108,31 @@ public sealed class JobManager : IJobManager
         await unitOfWork.CommitAsync(cancellationToken);
     }
 
-    public Task<Guid> RunNowAsync(string jobId, CancellationToken cancellationToken = default)
+    public async Task<Guid> RunNowAsync(string jobId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
-        return _dispatcher.DispatchAsync(jobId, cancellationToken);
+
+        try
+        {
+            Guid executionId = await _dispatcher.DispatchAsync(jobId, cancellationToken);
+            await _auditWriter.RecordAsync(
+                Actor,
+                "job.run",
+                jobId,
+                $"executionId={executionId:D}",
+                cancellationToken);
+            return executionId;
+        }
+        catch (DispatchRejectedException exception)
+        {
+            await _auditWriter.RecordAsync(
+                Actor,
+                "job.run.rejected",
+                jobId,
+                $"reason={exception.Reason}",
+                CancellationToken.None);
+            throw;
+        }
     }
 }
 
