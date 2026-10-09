@@ -44,7 +44,8 @@ flowchart TD
 `IJobPlugin.GetJobs()` discovers definitions and `IJobHandlerFactory` resolves a
 handler per job. Publication is one registry transaction: the single-row
 `plugin_activation` write plus the version state and discovered job definitions.
-Applying schedules to Quartz (the outbox → reconciler step) is phase 4.
+The same transaction writes a `ScheduleChange` outbox record per job; the
+reconciler applies them to Quartz (Phase 4).
 
 ```mermaid
 flowchart TD
@@ -55,33 +56,34 @@ flowchart TD
   DISC --> DEF["PluginDefinitionValidator:<br/>shape, plugin identity, unique job ids"]
   DEF --> ACC{"all valid?"}
   ACC -- "no" --> FAIL["version = Failed (audited)<br/>previous active preserved"]
-  ACC -- "yes" --> ACT[["PUBLISH (one transaction):<br/>plugin_activation row + version = Active<br/>+ discovered job definitions"]]
+  ACC -- "yes" --> ACT[["PUBLISH (one transaction):<br/>plugin_activation row + version = Active<br/>+ discovered job definitions<br/>+ ScheduleChange outbox records"]]
   ACT --> RETIRE["previous active: Draining → drain policy →<br/>unload; Retired (clean) or unclean marker"]
   ACT --> AUD[("audit log")]
-  ACT -. "phase 4" .-> OUT["operations outbox: ScheduleChange"]
-  OUT -.-> REC["Reconciler"]
-  REC -.-> QZ[("Quartz ADO.NET store")]
+  ACT --> OUT["operations outbox: ScheduleChange"]
+  OUT --> REC["Reconciler"]
+  REC --> QZ[("Quartz ADO.NET store")]
 ```
 
-## Execute (Phase 3 — implemented)
+## Execute (Phase 3–4 — implemented)
 
 Manual runs enter through `IJobManager.RunNowAsync`; scheduled runs enter from
-Quartz once phase 4 lands. The dispatcher resolves the active version, pins it
-with the configuration revision, admits the execution under the concurrency
-gates, and runs it to a terminal state. Retries loop inside the runner against
-the already-pinned handler. Worker execution is phase 7.
+Quartz's bridge job. The dispatcher resolves the active version, pins it with
+the configuration revision, admits the execution under the concurrency gates,
+and runs it to a terminal state. Retries loop inside the runner against the
+already-pinned handler. Worker execution is phase 8.
 
 ```mermaid
 flowchart TD
   RUN["IJobManager.RunNowAsync(jobId)<br/>(manual run)"] --> DISP["Dispatcher.DispatchAsync(jobId)"]
-  QZ[("Quartz fires trigger")] -. "phase 4" .-> DISP
+  QZ[("Quartz fires trigger")] --> BRIDGE["QuartzBridgeJob:<br/>read jobId from job data"]
+  BRIDGE --> DISP
   DISP --> RES["resolve active version from plugin_activation"]
   RES --> PIN["pin plugin version + configRevision<br/>+ resolve handler"]
   PIN --> CONC{"ConcurrencyGate:<br/>global limit (default 8),<br/>per-job no-overlap default"}
   CONC -- "blocked" --> WAIT["wait for a free slot"]
   CONC -- "admitted" --> MODE{"executionMode"}
   MODE -- "in-process" --> IP["Runtime.InProcess:<br/>build JobExecutionContext scope"]
-  MODE -. "worker (phase 7)" .-> WK["Runtime.Worker:<br/>authenticated local IPC"]
+  MODE -. "worker (phase 8)" .-> WK["Runtime.Worker:<br/>authenticated local IPC"]
   IP --> H["IJobHandler.ExecuteAsync<br/>(timeout + cancellation token)"]
   WK -.-> H
   H --> EXEC[("execution store:<br/>Pending → Running → terminal")]
@@ -93,6 +95,39 @@ flowchart TD
   CANCEL --> H
 ```
 
+## Reconcile & project to Quartz (Phase 4 — implemented)
+
+The reconciler (`ScheduleReconciler`, in `Scheduler.Application`) is the only component that talks
+to the scheduler, and it does so through the `IScheduleStore` port (`QuartzScheduleStore`, in
+`Scheduler.Infrastructure`). It runs at startup, after each lifecycle/API mutation, and on the
+periodic service; sweeps are serialized so they cannot race. Managers only publish durable outbox
+records.
+
+```mermaid
+flowchart TD
+  START["startup"] --> REC
+  FILTER["Host ReconcileAfterLifecycleFilter<br/>(after activate/deactivate/rollback/remove/update)"] --> REC
+  PERIODIC["ReconciliationService<br/>PeriodicTimer sweep"] --> REC
+  PM["PluginManager / JobManager"] -- "one registry transaction:<br/>rows + ScheduleChange record" --> OUT[("operations outbox")]
+  OUT --> REC["ScheduleReconciler.ReconcileAsync<br/>(serialized)"]
+
+  REC --> S1["1. lifecycle: resolve non-terminal ops<br/>published → Succeeded, else RolledBack/Failed"]
+  REC --> S2["2. outbox: apply Pending/Running ScheduleChange<br/>(apply-then-mark, idempotent)"]
+  REC --> S3["3. drift repair: compare registry vs live triggers"]
+
+  S1 --> REG[("registry (SQLite)")]
+  S2 --> REG
+  S3 --> REG
+  REG --> DESIRED{"desired projections:<br/>enabled + plugin active +<br/>one-shot not consumed"}
+  DESIRED --> STORE
+  S2 --> STORE["IScheduleStore (QuartzScheduleStore)"]
+  S3 --> STORE
+  STORE -- "AddJob(Replacing) +<br/>ScheduleTrigger(Replace)" --> QZ[("Quartz ADO.NET store<br/>QRTZ_ schema")]
+  STORE -- "DeleteJob (rogue/disabled/inactive)" --> QZ
+  QZ -- "fire" --> BR["QuartzBridgeJob → IDispatcher.DispatchAsync"]
+  REC --> AUD[("audit log: results + failures")]
+```
+
 ## Modules & layering
 
 ```mermaid
@@ -100,19 +135,25 @@ flowchart LR
   subgraph Ctrl["Control plane (implemented)"]
     CLI["Scheduler.Cli"] --> API["Management API (Host)"]
     API --> PM["Plugin Manager"]
+    API --> JM["Job Manager"]
     PM --> REG[("Registry: SQLite")]
+    JM --> REG
     PM --> ART[("Artifact store")]
-    RECON["Reconciler"] --> REG
-    RECON --> QZ[("Quartz store")]
+    FILTER["Host post-lifecycle filter"] --> RECON
+    PERIODIC["ReconciliationService"] --> RECON
+    RECON["ScheduleReconciler (Application)"] --> REG
+    RECON --> STORE["IScheduleStore"]
+    STORE["QuartzScheduleStore (Infrastructure)"] --> QZ[("Quartz store")]
   end
   subgraph Exe["Execution plane (in-process implemented)"]
-    QZ --> DISP["Dispatcher"]
+    QZ --> BRIDGE["QuartzBridgeJob"]
+    BRIDGE --> DISP["Dispatcher"]
     RUN["Job Manager (manual run)"] --> DISP
     DISP --> RT["Runtime.InProcess"]
-    DISP -. "phase 7" .-> RWK["Runtime.Worker"]
+    DISP -. "phase 8" .-> RWK["Runtime.Worker"]
     RT --> EXC[("Execution store")]
   end
-  PM -. "operation outbox (phase 4)" .-> RECON
+  PM -- "operation outbox" --> RECON
   CON["Contracts (no deps)"] --> APP["Application"]
   APP --> INF["Infrastructure"]
   CON --> INF
@@ -124,6 +165,9 @@ flowchart LR
   CON --> HOST
 ```
 
-Planned in later phases: the reconciler and Quartz trigger application (phase 4),
-the management API/CLI lifecycle surface (phase 5), secrets/observability
-(phase 6), and the worker backend (phase 7).
+Quartz types stay inside `Scheduler.Infrastructure` (and the Host composition root); the reconciler
+reaches Quartz only through the application-owned `IScheduleStore` port, so `Scheduler.Application`
+and `Scheduler.Contracts` remain Quartz-free.
+
+Planned in later phases: the management API/CLI lifecycle surface (phase 5),
+secrets/observability (phase 6), and the worker backend (phase 8).

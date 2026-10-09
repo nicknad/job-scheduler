@@ -132,6 +132,39 @@ public sealed class JobRepositoryTests
         Assert.Null(await read.Jobs.GetAsync(job.Definition.JobId, CancellationToken));
     }
 
+    [Fact]
+    public async Task ListByPluginReturnsOnlyThatPluginsJobs()
+    {
+        using SqliteTestDatabase database = new();
+        await database.InitializeAsync(CancellationToken);
+
+        JobRecord primary = NewJob();
+        JobRecord secondary = NewJob() with
+        {
+            Definition = NewJob().Definition with { JobId = "secondary-job" },
+        };
+        JobRecord other = NewJob() with
+        {
+            Definition = NewJob().Definition with { JobId = "other-job", PluginId = "other-plugin" },
+        };
+
+        await using (IRegistryUnitOfWork unitOfWork = await database.UnitOfWorkFactory.BeginAsync(CancellationToken))
+        {
+            await unitOfWork.Jobs.UpsertAsync(primary, CancellationToken);
+            await unitOfWork.Jobs.UpsertAsync(secondary, CancellationToken);
+            await unitOfWork.Jobs.UpsertAsync(other, CancellationToken);
+            await unitOfWork.CommitAsync(CancellationToken);
+        }
+
+        await using IRegistryUnitOfWork read = await database.UnitOfWorkFactory.BeginAsync(CancellationToken);
+        IReadOnlyList<JobRecord> jobs = await read.Jobs.ListByPluginAsync("monthly-report", CancellationToken);
+
+        Assert.Equal(2, jobs.Count);
+        Assert.All(jobs, job => Assert.Equal("monthly-report", job.Definition.PluginId));
+        Assert.Contains(jobs, job => job.Definition.JobId == "monthly-report");
+        Assert.Contains(jobs, job => job.Definition.JobId == "secondary-job");
+    }
+
     private static JobRecord NewJob() => new()
     {
         Definition = new JobDefinition

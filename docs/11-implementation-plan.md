@@ -63,7 +63,7 @@ Tests: execute a compiled test plugin; timeout/cancel paths; parallel vs no-over
 success and cooperative-unload-failure paths.
 Exit gate: single-job runtime install → activate → run → drain works end-to-end.
 
-## Phase 4 — Quartz integration and reconciliation
+## Phase 4 — Quartz integration and reconciliation (done)
 
 **Goal:** one scheduling authority, converged state.
 Deliverables: Quartz hosted scheduler with ADO.NET SQLite job store; trigger derivation
@@ -72,7 +72,13 @@ sweep) consuming the outbox; drift repair toward the registry; misfire mapping t
 disabled job handling.
 Tests: schedule add/modify/disable/re-enable without restart (acceptance #3); crash mid-operation
 → restart → converges (acceptance #7); drift (rogue trigger) removed.
-Exit gate: acceptance #3 and #7 green.
+Exit gate: acceptance #3 and #7 green. Per-step gate — each reconciliation step is independently
+idempotent and re-runnable: lifecycle resolution is a registry read plus a terminal transition,
+outbox application is apply-then-mark, and drift repair is a full registry-versus-Quartz diff, so a
+sweep interrupted at any point converges on the next sweep. Quartz hosting is configured from the
+`Quartz` package (the `Quartz.Extensions.Hosting` package is an empty 4.x meta-package); Quartz
+types stay in `Scheduler.Infrastructure` and the host composition root, and the reconciler reaches
+Quartz only through `IScheduleStore`.
 
 ## Phase 5 — Management API, CLI, and audit
 

@@ -11,8 +11,10 @@ using Scheduler.Contracts.Jobs;
 using Scheduler.Contracts.Secrets;
 using Scheduler.Infrastructure.Packaging;
 using Scheduler.Infrastructure.Persistence;
+using Scheduler.Infrastructure.Scheduling;
 using Scheduler.Runtime.InProcess.AssemblyLoading;
 using Scheduler.Runtime.InProcess.Execution;
+using Scheduler.Host;
 
 const long MultipartBodyLengthLimit = 512L * 1024 * 1024;
 
@@ -39,18 +41,23 @@ ExecutionOptions executionOptions = new()
 {
     GlobalConcurrencyLimit = builder.Configuration.GetValue("JobScheduler:GlobalConcurrencyLimit", 8),
 };
+ScheduleOptions scheduleOptions = new()
+{
+    SchedulerName = builder.Configuration["JobScheduler:SchedulerName"] ?? "scheduler",
+    UsePersistentStore = builder.Configuration.GetValue("JobScheduler:UsePersistentStore", true),
+};
+
+IFileSystem fileSystem = new FileSystem();
+SqliteConnectionFactory connectionFactory = new(persistenceOptions, fileSystem);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IFileSystem>(new FileSystem());
+builder.Services.AddSingleton(fileSystem);
 builder.Services.AddSingleton(persistenceOptions);
 builder.Services.AddSingleton(packagingOptions);
 builder.Services.AddSingleton(packagingOptions.ToLimits());
 builder.Services.AddSingleton(SchedulerContract.CurrentVersion);
 builder.Services.AddSingleton(executionOptions);
-builder.Services.AddSingleton<ISqliteConnectionFactory>(services =>
-    new SqliteConnectionFactory(
-        services.GetRequiredService<PersistenceOptions>(),
-        services.GetRequiredService<IFileSystem>()));
+builder.Services.AddSingleton<ISqliteConnectionFactory>(connectionFactory);
 builder.Services.AddSingleton<IDatabaseInitializer>(services =>
     new SqliteDatabaseInitializer(
         services.GetRequiredService<ISqliteConnectionFactory>(),
@@ -74,6 +81,8 @@ builder.Services.AddSingleton<ExecutionRunner>();
 builder.Services.AddSingleton<IDispatcher, Dispatcher>();
 builder.Services.AddSingleton<IJobManager, JobManager>();
 builder.Services.AddSingleton<IPluginManager, PluginManager>();
+
+builder.Services.AddSchedulerScheduling(connectionFactory.DatabasePath, scheduleOptions);
 
 var app = builder.Build();
 
@@ -155,13 +164,14 @@ app.MapPost("/api/plugins/{id}/{version}/activate", async (
 
     PluginOperation operation = await manager.ActivateAsync(id, parsed, cancellationToken);
     return LifecycleResult(operation);
-});
+}).AddEndpointFilter<ReconcileAfterLifecycleFilter>();
 
 app.MapPost("/api/plugins/{id}/deactivate", async (
     string id,
     IPluginManager manager,
     CancellationToken cancellationToken) =>
-    LifecycleResult(await manager.DeactivateAsync(id, cancellationToken)));
+    LifecycleResult(await manager.DeactivateAsync(id, cancellationToken)))
+    .AddEndpointFilter<ReconcileAfterLifecycleFilter>();
 
 app.MapPost("/api/plugins/{id}/{version}/rollback", async (
     string id,
@@ -175,13 +185,14 @@ app.MapPost("/api/plugins/{id}/{version}/rollback", async (
     }
 
     return LifecycleResult(await manager.RollbackAsync(id, parsed, cancellationToken));
-});
+}).AddEndpointFilter<ReconcileAfterLifecycleFilter>();
 
 app.MapPost("/api/plugins/{id}/remove", async (
     string id,
     IPluginManager manager,
     CancellationToken cancellationToken) =>
-    LifecycleResult(await manager.RemoveAsync(id, cancellationToken)));
+    LifecycleResult(await manager.RemoveAsync(id, cancellationToken)))
+    .AddEndpointFilter<ReconcileAfterLifecycleFilter>();
 
 app.MapGet("/api/jobs", async (IJobManager jobs, CancellationToken cancellationToken) =>
     Results.Ok(await jobs.ListAsync(cancellationToken)));
@@ -211,7 +222,7 @@ app.MapPut("/api/jobs/{id}", async (
     {
         return Results.BadRequest(new { error = exception.Message, exception.Errors });
     }
-});
+}).AddEndpointFilter<ReconcileAfterLifecycleFilter>();
 
 app.MapPost("/api/jobs/{id}/run", async (
     string id,

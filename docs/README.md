@@ -20,7 +20,8 @@ fix the code or fix the docs in the same change.
 | [12-decisions.md](12-decisions.md) | Locked decisions and lightweight ADRs |
 | [graphs/plugin-workflows.md](graphs/plugin-workflows.md) | Diagrams: install/store, load/activate, execute, modules |
 
-Phases 0–3 of the [implementation plan](11-implementation-plan.md) are implemented: package
-install/validation/promotion, the in-process plugin runtime (load → activate → run → drain), and the
-dispatcher with the durable execution store. The workflow graphs mark **implemented** sections and
-edges versus those still **planned** for later phases.
+Phases 0–4 of the [implementation plan](11-implementation-plan.md) are implemented: package
+install/validation/promotion, the in-process plugin runtime (load → activate → run → drain), the
+dispatcher with the durable execution store, and the Quartz hosted scheduler with the reconciler
+that applies the outbox and repairs drift toward the registry. The workflow graphs mark
+**implemented** sections and edges versus those still **planned** for later phases.

@@ -40,6 +40,26 @@ internal sealed partial class SqliteRegistryUnitOfWork
         return jobs;
     }
 
+    public async Task<IReadOnlyList<JobRecord>> ListByPluginAsync(
+        string pluginId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+
+        await using SqliteCommand command = CreateCommand(
+            "SELECT " + JobColumns + " FROM jobs WHERE plugin_id = $pluginId ORDER BY job_id;");
+        command.Parameters.AddWithValue("$pluginId", pluginId);
+
+        List<JobRecord> jobs = [];
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            jobs.Add(ReadJob(reader));
+        }
+
+        return jobs;
+    }
+
     public async Task UpsertAsync(JobRecord job, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(job);

@@ -13,6 +13,20 @@
           "SQLitePCLRaw.core": "2.1.12"
         }
       },
+      "Quartz": {
+        "type": "Direct",
+        "requested": "[4.4.0, )",
+        "resolved": "4.4.0",
+        "contentHash": "S4swtePwq2vUIvG+B9M7BNIv65icqWfkQwkR2EzVvoT3/MACM2FaSjappcIzaGk5/5K/D8kWLb92kwURkWih3Q==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Binder": "10.0.0",
+          "Microsoft.Extensions.DependencyInjection": "10.0.0",
+          "Microsoft.Extensions.Diagnostics.HealthChecks": "10.0.0",
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options.ConfigurationExtensions": "10.0.0"
+        }
+      },
       "System.IO.Abstractions": {
         "type": "Direct",
         "requested": "[22.3.0, )",
@@ -344,20 +358,6 @@
         "type": "Project",
         "dependencies": {
           "Scheduler.Contracts": "[1.0.0, )"
-        }
-      },
-      "Quartz": {
-        "type": "CentralTransitive",
-        "requested": "[4.4.0, )",
-        "resolved": "4.4.0",
-        "contentHash": "S4swtePwq2vUIvG+B9M7BNIv65icqWfkQwkR2EzVvoT3/MACM2FaSjappcIzaGk5/5K/D8kWLb92kwURkWih3Q==",
-        "dependencies": {
-          "Microsoft.Extensions.Configuration.Binder": "10.0.0",
-          "Microsoft.Extensions.DependencyInjection": "10.0.0",
-          "Microsoft.Extensions.Diagnostics.HealthChecks": "10.0.0",
-          "Microsoft.Extensions.Hosting.Abstractions": "10.0.0",
-          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
-          "Microsoft.Extensions.Options.ConfigurationExtensions": "10.0.0"
         }
       }
     }

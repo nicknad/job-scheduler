@@ -1,5 +1,6 @@
 using Scheduler.Application.Execution;
 using Scheduler.Application.Persistence;
+using Scheduler.Application.Reconciliation;
 using Scheduler.Contracts.Jobs;
 
 namespace Scheduler.Application.JobManagement;
@@ -60,13 +61,21 @@ public sealed class JobManager : IJobManager
         JobRecord? existing = await unitOfWork.Jobs.GetAsync(definition.JobId, cancellationToken);
         int revision = (existing?.ConfigurationRevision ?? 0) + 1;
 
-        await unitOfWork.Jobs.UpsertAsync(
-            new JobRecord
-            {
-                Definition = definition,
-                ConfigurationRevision = revision,
-                UpdatedAt = _timeProvider.GetUtcNow(),
-            },
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        JobRecord updated = new()
+        {
+            Definition = definition,
+            ConfigurationRevision = revision,
+            UpdatedAt = now,
+        };
+
+        await unitOfWork.Jobs.UpsertAsync(updated, cancellationToken);
+        await unitOfWork.Operations.CreateAsync(
+            ScheduleChangeOutbox.Create(
+                Guid.NewGuid(),
+                updated,
+                existing is null ? ScheduleChangeAction.Create : ScheduleChangeAction.Update,
+                now),
             cancellationToken);
         await unitOfWork.CommitAsync(cancellationToken);
 
@@ -78,7 +87,18 @@ public sealed class JobManager : IJobManager
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
         await using IRegistryUnitOfWork unitOfWork = await _unitOfWorkFactory.BeginAsync(cancellationToken);
-        await unitOfWork.Jobs.SetEnabledAsync(jobId, enabled, _timeProvider.GetUtcNow(), cancellationToken);
+        JobRecord job = await unitOfWork.Jobs.GetAsync(jobId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Job '{jobId}' was not found.");
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        await unitOfWork.Jobs.SetEnabledAsync(jobId, enabled, now, cancellationToken);
+        await unitOfWork.Operations.CreateAsync(
+            ScheduleChangeOutbox.Create(
+                Guid.NewGuid(),
+                job with { Definition = job.Definition with { Enabled = enabled }, UpdatedAt = now },
+                enabled ? ScheduleChangeAction.Update : ScheduleChangeAction.Pause,
+                now),
+            cancellationToken);
         await unitOfWork.CommitAsync(cancellationToken);
     }
 

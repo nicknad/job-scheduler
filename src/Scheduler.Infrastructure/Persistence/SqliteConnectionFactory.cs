@@ -31,9 +31,13 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
         string databasePath = ResolveDatabasePath(options, fileSystem);
         EnsureDirectory(fileSystem, databasePath);
 
+        DatabasePath = databasePath;
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
         _busyTimeoutMilliseconds = busyTimeoutMilliseconds;
     }
+
+    /// <summary>The absolute database path, resolved from the configured root.</summary>
+    public string DatabasePath { get; }
 
     public async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)
     {

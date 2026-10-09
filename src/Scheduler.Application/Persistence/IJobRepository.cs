@@ -7,6 +7,9 @@ public interface IJobRepository
 
     Task<IReadOnlyList<JobRecord>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the jobs contributed by a plugin, by stable job id.</summary>
+    Task<IReadOnlyList<JobRecord>> ListByPluginAsync(string pluginId, CancellationToken cancellationToken = default);
+
     /// <summary>Inserts or replaces a job definition, including its configuration revision.</summary>
     Task UpsertAsync(JobRecord job, CancellationToken cancellationToken = default);
 

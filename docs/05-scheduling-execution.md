@@ -6,7 +6,7 @@
   derived projection of the platform's job registry, kept in sync by reconciliation.
 - Every trigger is derived from a stable platform `JobId` plus the job's current
   `configurationRevision`. Quartz job keys and job data are strings only (job id, plugin id,
-  version, revision, execution id) — no binary-serialized .NET types.
+  version, revision) — no binary-serialized .NET types.
 - Schedule changes update triggers without touching plugin code. Parameter changes affect **new**
   executions by default. Plugin version changes change the dispatch target, never running
   executions.
@@ -14,22 +14,77 @@
   the configuration revision) on the execution. A job whose plugin has no active version does not
   dispatch; the failure is explicit.
 - Plugins cannot modify scheduler state.
-- Dispatch is invoked by `IJobManager.RunNowAsync` for manual runs (phase 3); Quartz scheduled
-  fires enter the same dispatcher in phase 4. Running executions are cancelled cooperatively
-  through the dispatcher (an explicit cancel request or the configured drain policy).
+- Dispatch is invoked by `IJobManager.RunNowAsync` for manual runs and by the Quartz bridge job
+  for scheduled fires; both enter the same dispatcher. Running executions are cancelled
+  cooperatively through the dispatcher (an explicit cancel request or the configured drain policy).
 
-## Reconciliation (phase 4 — planned)
+## Trigger derivation
 
-The reconciler (on startup, after lifecycle operations, and on a periodic sweep):
+Every trigger is derived from the stable platform `JobId` plus the job's current
+`configurationRevision`:
 
-1. Resumes or rolls back incomplete lifecycle operations from durable operation records.
-2. Applies pending registry → Quartz changes from the outbox (create/update/pause/delete triggers).
-3. Detects drift (triggers without a registry basis, or enabled jobs without triggers) and repairs
-  it toward the registry.
-4. Records reconciliation results and failures as structured events.
+- The Quartz `JobKey` and `TriggerKey` are both the `JobId` inside the single group `jobs`, so a
+  job has exactly one durable job detail and one trigger.
+- Job and trigger data are **strings only**: `jobId`, `pluginId`, `version`, `revision`. Nothing
+  is binary-serialized into the store; `StoreJobDataAsStrings` is enforced.
+- Cron and fixed-interval schedules start now and repeat; one-shot schedules start at their
+  `oneShotAt`. The `revision` stored on the trigger lets the reconciler refresh a stale trigger
+  when the job's configuration changes.
+- A one-shot is a single firing: once its `oneShotAt` has passed it is treated as consumed, so a
+  completed trigger is never recreated (and re-fired) by a later sweep.
+- Applying a projection is idempotent: `AddJob(Replacing)` then `ScheduleTrigger(Replace)`.
+
+## Quartz → dispatcher path (phase 4 — implemented)
+
+The single Quartz job type (`QuartzBridgeJob`) is registered by Quartz through DI. When a trigger
+fires it reads `jobId` from the merged job data and calls `IDispatcher.DispatchAsync(jobId)`. The
+bridge never reads or writes scheduling state and never resolves plugin or contract types; the
+dispatcher resolves the active plugin version and pins it (with the configuration revision) on the
+execution. Since one `IJob` type is used for every job, per-job no-overlap stays with the
+`ConcurrencyGate` rather than the static `DisallowConcurrentExecution` attribute, so
+`AllowParallel` jobs are unaffected.
+
+## Reconciliation (phase 4 — implemented)
+
+The reconciler (`ScheduleReconciler`, invoked on startup, after lifecycle operations, and on a
+periodic sweep) converges Quartz toward the registry. Sweeps are serialized, so the periodic loop
+and the post-lifecycle trigger cannot race each other:
+
+1. **Lifecycle operations.** Every non-terminal operation record (including one stranded `Pending`
+   by a crash before its first `Running` write) is resolved against the registry and driven to a
+   terminal state: an activation whose version is now published is resumed (`Succeeded`); one that
+   never published is rolled back (`RolledBack`); an install that never promoted fails;
+   deactivation/removal that already applied succeeds. Publication is atomic (ADR-003), so "did it
+   publish?" is a registry read.
+2. **Outbox apply-then-mark.** Every non-terminal `ScheduleChange` record — `Pending` (never
+   applied) or `Running` (crash between apply and mark) — is applied to Quartz first and only then
+   marked `Succeeded`, so replay is safe and no record is stranded. The reconciler re-reads the job
+   from the registry before applying; the record's payload is intent, the registry is truth.
+3. **Drift repair.** The reconciler lists the live triggers and repairs toward the registry: a
+   trigger with no registry basis (unknown job, disabled job, or a plugin with no active version)
+   is removed; an enabled job missing a trigger is scheduled; a trigger whose revision/version is
+   stale is refreshed.
+4. **Structured events.** Each lifecycle resolution and the overall outcome are written to the
+   audit log; per-job drift/outbox failures are collected and surfaced in
+   `ReconciliationResult.Errors` while the remaining jobs still converge.
 
 Registry and Quartz updates are not one atomic transaction — that is exactly what the outbox
 operation records exist for ([07-persistence.md](07-persistence.md)).
+
+## Misfire mapping and disabled jobs
+
+`MisfirePolicy` maps to the Quartz instruction for the trigger family:
+
+| `MisfirePolicy` | Cron trigger | Simple trigger |
+| --- | --- | --- |
+| `FireOnce` | `FireAndProceed` | `FireNow` |
+| `Skip` | `DoNothing` | `NextWithRemainingCount` |
+| `RunImmediately` | `FireAndProceed` | `NowWithRemainingCount` |
+
+Cron triggers cannot express "abandon the scheduled time", so `RunImmediately` collapses to
+`FireAndProceed` there. A **disabled job has no active trigger**: the reconciler removes it, and the
+dispatcher independently rejects a dispatch of a disabled job. A job whose plugin has no active
+version is likewise treated as unschedulable and has its trigger removed.
 
 ## Execution tracking
 

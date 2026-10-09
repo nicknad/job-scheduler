@@ -1,8 +1,8 @@
 using System.Text;
-using System.Text.Json;
 using Scheduler.Application.Execution;
 using Scheduler.Application.Packaging;
 using Scheduler.Application.Persistence;
+using Scheduler.Application.Reconciliation;
 using Scheduler.Contracts.Jobs;
 
 namespace Scheduler.Application.PluginManagement;
@@ -93,7 +93,7 @@ public sealed class PluginManager : IPluginManager
             PluginVersionRecord? existing = result.Manifest is null
                 ? null
                 : await GetExistingAsync(result.Manifest.Id, result.Manifest.Version, cancellationToken);
-            bool alreadyPublished = existing is not null && IsPublished(existing.State);
+            bool alreadyPublished = existing is not null && existing.State.IsPublished();
 
             if (!result.IsValid || result.Manifest is null)
             {
@@ -438,7 +438,7 @@ public sealed class PluginManager : IPluginManager
             return new PluginOperation(operationId, pluginId, target, PluginOperationStatus.Failed, error);
         }
 
-        await SetVersionStateAsync(pluginId, target, PluginLifecycleState.Removed, cancellationToken);
+        await MarkRemovedAsync(pluginId, target, cancellationToken);
         await SetOperationStateAsync(
             operationId,
             OperationState.Succeeded,
@@ -613,13 +613,6 @@ public sealed class PluginManager : IPluginManager
         return versions.Count > 0 ? versions[^1].State : PluginLifecycleState.Uploaded;
     }
 
-    private static bool IsPublished(PluginLifecycleState state) =>
-        state is PluginLifecycleState.Staged
-            or PluginLifecycleState.Activating
-            or PluginLifecycleState.Active
-            or PluginLifecycleState.Draining
-            or PluginLifecycleState.Retired;
-
     private async Task<PluginVersionRecord?> GetExistingAsync(
         string pluginId,
         Version version,
@@ -738,7 +731,7 @@ public sealed class PluginManager : IPluginManager
         await using IRegistryUnitOfWork unitOfWork = await _unitOfWorkFactory.BeginAsync(cancellationToken);
         PluginVersionRecord? existing = await unitOfWork.Plugins.GetVersionAsync(
             manifest.Id, manifest.Version, cancellationToken);
-        if (existing is not null && IsPublished(existing.State))
+        if (existing is not null && existing.State.IsPublished())
         {
             return;
         }
@@ -822,7 +815,7 @@ public sealed class PluginManager : IPluginManager
             StagingPath = stagingRoot,
         };
 
-    private static string Serialize<T>(T payload) => JsonSerializer.Serialize(payload);
+    private static string Serialize<T>(T payload) => OperationPayloadCodec.Serialize(payload);
 
     private async Task CreateLifecycleOperationAsync(
         Guid operationId,
@@ -874,6 +867,26 @@ public sealed class PluginManager : IPluginManager
             state,
             validationError,
             _timeProvider.GetUtcNow(),
+            cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
+    }
+
+    private async Task MarkRemovedAsync(string pluginId, Version version, CancellationToken cancellationToken)
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        await using IRegistryUnitOfWork unitOfWork = await _unitOfWorkFactory.BeginAsync(cancellationToken);
+        await unitOfWork.Plugins.SetVersionStateAsync(
+            pluginId,
+            version,
+            PluginLifecycleState.Removed,
+            validationError: null,
+            validatedAt: now,
+            cancellationToken);
+        await PublishScheduleChangesAsync(
+            unitOfWork,
+            await unitOfWork.Jobs.ListByPluginAsync(pluginId, cancellationToken),
+            ScheduleChangeAction.Delete,
+            now,
             cancellationToken);
         await unitOfWork.CommitAsync(cancellationToken);
     }
@@ -951,13 +964,33 @@ public sealed class PluginManager : IPluginManager
         foreach (JobDefinition job in jobs)
         {
             JobRecord? existing = await unitOfWork.Jobs.GetAsync(job.JobId, cancellationToken);
-            await unitOfWork.Jobs.UpsertAsync(
-                new JobRecord
-                {
-                    Definition = job with { PluginVersion = version },
-                    ConfigurationRevision = (existing?.ConfigurationRevision ?? 0) + 1,
-                    UpdatedAt = now,
-                },
+            JobRecord record = new()
+            {
+                Definition = job with { PluginVersion = version },
+                ConfigurationRevision = (existing?.ConfigurationRevision ?? 0) + 1,
+                UpdatedAt = now,
+            };
+            await unitOfWork.Jobs.UpsertAsync(record, cancellationToken);
+            await PublishScheduleChangesAsync(
+                unitOfWork,
+                [record],
+                existing is null ? ScheduleChangeAction.Create : ScheduleChangeAction.Update,
+                now,
+                cancellationToken);
+        }
+
+        // Definitions the new version no longer provides are removed in the same
+        // publication, so their triggers converge away toward the registry.
+        HashSet<string> provided = new(jobs.Select(job => job.JobId), StringComparer.Ordinal);
+        IReadOnlyList<JobRecord> existingJobs = await unitOfWork.Jobs.ListByPluginAsync(pluginId, cancellationToken);
+        foreach (JobRecord obsolete in existingJobs.Where(job => !provided.Contains(job.Definition.JobId)))
+        {
+            await unitOfWork.Jobs.DeleteAsync(obsolete.Definition.JobId, cancellationToken);
+            await PublishScheduleChangesAsync(
+                unitOfWork,
+                [obsolete],
+                ScheduleChangeAction.Delete,
+                now,
                 cancellationToken);
         }
 
@@ -966,15 +999,22 @@ public sealed class PluginManager : IPluginManager
 
     private async Task StopDispatchAsync(string pluginId, Version version, CancellationToken cancellationToken)
     {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
         await using IRegistryUnitOfWork unitOfWork = await _unitOfWorkFactory.BeginAsync(cancellationToken);
         await unitOfWork.Plugins.SetVersionStateAsync(
             pluginId,
             version,
             PluginLifecycleState.Draining,
             validationError: null,
-            validatedAt: _timeProvider.GetUtcNow(),
+            validatedAt: now,
             cancellationToken);
         await unitOfWork.Plugins.ClearActivationAsync(pluginId, cancellationToken);
+        await PublishScheduleChangesAsync(
+            unitOfWork,
+            await unitOfWork.Jobs.ListByPluginAsync(pluginId, cancellationToken),
+            ScheduleChangeAction.Pause,
+            now,
+            cancellationToken);
         await unitOfWork.CommitAsync(cancellationToken);
     }
 
@@ -1047,15 +1087,18 @@ public sealed class PluginManager : IPluginManager
         return _auditWriter.RecordAsync(Actor, action, target, details, cancellationToken);
     }
 
-    private sealed record InstallOperationPayload(string? StagingRoot, string? PluginId, string? Version)
+    private static async Task PublishScheduleChangesAsync(
+        IRegistryUnitOfWork unitOfWork,
+        IReadOnlyList<JobRecord> jobs,
+        ScheduleChangeAction action,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
-        public string? Error { get; init; }
-    }
-
-    private sealed record LifecycleOperationPayload(string PluginId, string? Version)
-    {
-        public string? Error { get; init; }
-
-        public string? UncleanUnload { get; init; }
+        foreach (JobRecord job in jobs)
+        {
+            await unitOfWork.Operations.CreateAsync(
+                ScheduleChangeOutbox.Create(Guid.NewGuid(), job, action, now),
+                cancellationToken);
+        }
     }
 }

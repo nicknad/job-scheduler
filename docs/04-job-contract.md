@@ -69,6 +69,8 @@ Rules:
 - All job parameters must be **serializable data**. Never persist plugin object instances or rely
   on serializing arbitrary .NET types into the job store (Quartz's data map is used in string
   form only).
+- A one-shot schedule (`OneShotAt`) fires once. Once its fire time has passed it is treated as
+  consumed and is not recreated, so a completed one-shot never re-fires on a later sweep.
 - Definitions returned by `GetJobs()` are *proposals*; the registry is authoritative for what is
   enabled and how it is scheduled.
 - Contract evolution is additive and versioned; breaking changes follow the compatibility decision
